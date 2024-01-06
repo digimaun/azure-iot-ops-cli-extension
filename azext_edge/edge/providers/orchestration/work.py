@@ -163,9 +163,14 @@ class WorkManager:
             prepare_sp,
             provision_akv_csi_driver,
             wait_for_terminal_state,
+            get_providers_reg,
+            validate_principal_permissions,
         )
 
         work_kpis = {}
+        result = get_providers_reg(**self._kwargs)
+        validate_principal_permissions(**self._kwargs)
+        return result
 
         try:
             # CSI driver segment

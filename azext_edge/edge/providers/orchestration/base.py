@@ -17,7 +17,7 @@ from ...util import (
     get_timestamp_now_utc,
     read_file_content,
 )
-from ...util.az_client import get_resource_client
+from ...util.az_client import get_resource_client, get_authz_client
 from ..base import (
     create_cluster_namespace,
     create_namespaced_configmap,
@@ -44,6 +44,13 @@ KEYVAULT_ARC_EXTENSION_VERSION = "1.5.1"
 
 DEFAULT_POLL_RETRIES = 240
 DEFAULT_POLL_WAIT_SEC = 15
+
+PROVIDERS_REG_MAP = {
+    "Microsoft.IoTOperationsOrchestrator": False,
+    "Microsoft.IoTOperationsMQ": False,
+    "Microsoft.IoTOperationsDataProcessor": False,
+    "Microsoft.DeviceRegistry": False,
+}
 
 
 class ServicePrincipal(NamedTuple):
@@ -441,3 +448,53 @@ def wait_for_terminal_state(poller: "LROPoller") -> "GenericResource":
         if poller.done():
             break
     return poller.result()
+
+
+def get_providers_reg(subscription_id: str, **kwargs):
+    from copy import deepcopy
+
+    providers_reg_map = deepcopy(PROVIDERS_REG_MAP)
+    resource_client = get_resource_client(subscription_id=subscription_id)
+    providers_list = resource_client.providers.list()
+    for provider in providers_list:
+        provider_dict = provider.as_dict()
+        if "namespace" in provider_dict and provider_dict["namespace"] in providers_reg_map:
+            if provider_dict["registration_state"] == "Registered":
+                providers_reg_map[provider_dict["namespace"]] = True
+    return providers_reg_map
+
+
+def register_providers(subscription_id: str, **kwargs):
+    resource_client = get_resource_client(subscription_id=subscription_id)
+    providers_list = resource_client.providers.list()
+
+    pass
+
+
+def validate_principal_permissions(subscription_id: str, resource_group_name: str, **kwargs):
+    permissions = get_principal_permissions_for_group(
+        subscription_id=subscription_id, resource_group_name=resource_group_name, **kwargs
+    )
+    roles = get_principal_roles_for_sub(subscription_id=subscription_id, resource_group_name=resource_group_name)
+    for permission in permissions:
+        import pdb
+
+        pdb.set_trace()
+        pass
+
+    for role in roles:
+        import pdb
+
+        pdb.set_trace()
+        pass
+
+
+
+def get_principal_permissions_for_group(subscription_id: str, resource_group_name: str, **kwargs):
+    authz_client = get_authz_client(subscription_id=subscription_id)
+    return authz_client.permissions.list_for_resource_group(resource_group_name)
+
+
+def get_principal_roles_for_sub(subscription_id: str, resource_group_name: str, **kwargs):
+    authz_client = get_authz_client(subscription_id=subscription_id)
+    return authz_client.role_assignments.list_for_scope(f"/subscriptions/{subscription_id}")
