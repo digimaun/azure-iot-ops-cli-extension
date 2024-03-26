@@ -16,6 +16,8 @@ from azure.mgmt.resource import ResourceManagementClient
 
 AZURE_CLI_CREDENTIAL = AzureCliCredential()
 
+_client_cache = {}
+
 
 def get_resource_client(subscription_id: str) -> ResourceManagementClient:
     return ResourceManagementClient(
@@ -25,9 +27,12 @@ def get_resource_client(subscription_id: str) -> ResourceManagementClient:
     )
 
 
-def get_authz_client(subscription_id: str):
-    return AuthorizationManagementClient(
-        credential=AZURE_CLI_CREDENTIAL,
-        subscription_id=subscription_id,
-        user_agent_policy=UserAgentPolicy(user_agent=USER_AGENT),
-    )
+def get_authz_client(subscription_id: str) -> AuthorizationManagementClient:
+    if "authz" not in _client_cache:
+        _client_cache["authz"] = AuthorizationManagementClient(
+            credential=AZURE_CLI_CREDENTIAL,
+            subscription_id=subscription_id,
+            user_agent_policy=UserAgentPolicy(user_agent=USER_AGENT),
+        )
+
+    return _client_cache["authz"]

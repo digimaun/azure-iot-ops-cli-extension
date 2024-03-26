@@ -207,7 +207,7 @@ class WorkManager:
             wait_for_terminal_state,
         )
         from .host import verify_cli_client_connections
-        from .permissions import verify_write_permission_against_rg
+        from .permissions import verify_write_permission_against_rg, verify_role_assignment_conditions_against_rg
         from .rp_namespace import register_providers
 
         work_kpis = {}
@@ -220,8 +220,8 @@ class WorkManager:
                 self._connected_cluster = verify_cluster_and_use_location(self._kwargs)
 
             # Always run this check
-            if not self._keyvault_resource_id and not KEYVAULT_API_V1.is_deployed():
-                raise ValidationError(error_msg="--kv-id is required when the Key Vault CSI driver is not installed.")
+            # if not self._keyvault_resource_id and not KEYVAULT_API_V1.is_deployed():
+            #     raise ValidationError(error_msg="--kv-id is required when the Key Vault CSI driver is not installed.")
 
             # Pre-check segment
             if (
@@ -229,18 +229,19 @@ class WorkManager:
                 and not self.display.categories[WorkCategoryKey.PRE_CHECK][1]
             ):
                 self.render_display(category=WorkCategoryKey.PRE_CHECK)
-                register_providers(**self._kwargs)
+                # register_providers(**self._kwargs)
 
                 self._completed_steps[WorkStepKey.REG_RP] = 1
                 self.render_display(category=WorkCategoryKey.PRE_CHECK)
 
-                if self._connected_cluster:
-                    throw_if_iotops_deployed(self._connected_cluster)
+                # if self._connected_cluster:
+                #     throw_if_iotops_deployed(self._connected_cluster)
 
                 if self._deploy_rsync_rules:
-                    verify_write_permission_against_rg(
-                        **self._kwargs,
-                    )
+                    # verify_write_permission_against_rg(
+                    #     **self._kwargs,
+                    # )
+                    verify_role_assignment_conditions_against_rg(**self._kwargs)
 
                 verify_custom_locations_enabled()
 

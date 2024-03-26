@@ -47,6 +47,23 @@ def verify_write_permission_against_rg(subscription_id: str, resource_group_name
     )
 
 
+def verify_role_assignment_conditions_against_rg(subscription_id: str, resource_group_name: str, **kwargs):
+    import pdb; pdb.set_trace()
+    for role_assignment in get_principal_role_assignments_for_group(subscription_id=subscription_id, resource_group_name=resource_group_name):
+        role_assignment_dict = role_assignment.as_dict()
+
+        import pdb; pdb.set_trace()
+
+
 def get_principal_permissions_for_group(subscription_id: str, resource_group_name: str):
     authz_client = get_authz_client(subscription_id=subscription_id)
     return authz_client.permissions.list_for_resource_group(resource_group_name)
+
+
+def get_principal_role_assignments_for_group(subscription_id: str, resource_group_name: str):
+    authz_client = get_authz_client(subscription_id=subscription_id)
+
+    return authz_client.role_assignments.list_for_scope(
+        scope=f"/subscriptions/{subscription_id}/resourceGroups/{resource_group_name}",
+        #filter="principalId eq '485bb911-08c1-456e-afed-42e5b938a1d0'",
+    )
