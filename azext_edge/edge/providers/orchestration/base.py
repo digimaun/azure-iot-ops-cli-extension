@@ -18,7 +18,7 @@ from ...util import (
     get_timestamp_now_utc,
     read_file_content,
 )
-from ...util.az_client import get_resource_client
+from ...util.az_client import get_resource_client, get_token_from_sp_credential
 from ..base import (
     create_cluster_namespace,
     create_namespaced_configmap,
@@ -109,7 +109,7 @@ def configure_cluster_secrets(
     cluster_namespace: str,
     cluster_secret_ref: str,
     cluster_akv_secret_class_name: str,
-    keyvault_sat_secret_name: str,
+    keyvault_spc_secret_name: str,
     keyvault_resource_id: str,
     sp_record: ServicePrincipal,
     **kwargs,
@@ -148,7 +148,7 @@ def configure_cluster_secrets(
                 name=secret_class,
                 namespace=cluster_namespace,
                 keyvault_name=keyvault_name,
-                secret_name=keyvault_sat_secret_name,
+                secret_name=keyvault_spc_secret_name,
                 tenantId=sp_record.tenant_id,
             )
         )
@@ -300,6 +300,8 @@ def prepare_sp(cmd, deployment_name: str, **kwargs) -> ServicePrincipal:
             body=json.dumps({"passwordCredential": {"displayName": deployment_name, "endDateTime": timestamp_str}}),
         )
         sp_secret = add_secret_op.json()["secretText"]
+        # For secret propagation
+        sleep(10)
 
     return ServicePrincipal(
         client_id=sp_app_id,
@@ -386,37 +388,59 @@ def prepare_keyvault_access_policy(
 
 
 def prepare_keyvault_secret(
-    cmd, deployment_name: str, vault_uri: str, keyvault_sat_secret_name: Optional[str] = None, **kwargs
+    cmd, deployment_name: str, vault_uri: str, keyvault_spc_secret_name: Optional[str] = None, **kwargs
 ) -> str:
     from azure.cli.core.util import send_raw_request
 
     url = vault_uri + "/secrets/{0}{1}?api-version=7.4"
-    if keyvault_sat_secret_name:
+    if keyvault_spc_secret_name:
         get_secretver: dict = send_raw_request(
             cli_ctx=cmd.cli_ctx,
             method="GET",
-            url=url.format(keyvault_sat_secret_name, "/versions"),
+            url=url.format(keyvault_spc_secret_name, "/versions"),
             resource="https://vault.azure.net",
         ).json()
         if not get_secretver.get("value"):
             send_raw_request(
                 cli_ctx=cmd.cli_ctx,
                 method="PUT",
-                url=url.format(keyvault_sat_secret_name, ""),
+                url=url.format(keyvault_spc_secret_name, ""),
                 resource="https://vault.azure.net",
                 body=json.dumps({"value": generate_secret()}),
             ).json()
     else:
-        keyvault_sat_secret_name = deployment_name.replace(".", "-")
+        keyvault_spc_secret_name = deployment_name.replace(".", "-")
         send_raw_request(
             cli_ctx=cmd.cli_ctx,
             method="PUT",
-            url=url.format(keyvault_sat_secret_name, ""),
+            url=url.format(keyvault_spc_secret_name, ""),
             resource="https://vault.azure.net",
             body=json.dumps({"value": generate_secret()}),
         ).json()
 
-    return keyvault_sat_secret_name
+    return keyvault_spc_secret_name
+
+
+def test_secret_via_sp(cmd, vault_uri: str, keyvault_spc_secret_name: str, sp_record: ServicePrincipal, **kwargs):
+    from azure.cli.core.util import send_raw_request
+
+    url = vault_uri + "/secrets/{0}{1}?api-version=7.4"
+
+    # Use SP record to generate
+    auth_token = get_token_from_sp_credential(
+        tenant_id=sp_record.tenant_id,
+        client_id=sp_record.client_id,
+        client_secret=sp_record.secret,
+        scope="https://vault.azure.net/.default",
+    )
+    import pdb; pdb.set_trace()
+    get_secretver: dict = send_raw_request(
+        cli_ctx=cmd.cli_ctx,
+        method="GET",
+        headers=[f"Authorization=Bearer {auth_token}"],  # Header format...
+        url=url.format(keyvault_spc_secret_name, "/versions"),
+    ).json()
+    import pdb; pdb.set_trace()
 
 
 # TODO: should be in utils

@@ -449,9 +449,9 @@ def load_iotops_arguments(self, _):
             arg_group="Key Vault CSI Driver",
         )
         context.argument(
-            "keyvault_sat_secret_name",
-            options_list=["--kv-sat-secret-name"],
-            help="The Key Vault secret *name* to use for the IoT Operations service account (SAT). "
+            "keyvault_spc_secret_name",
+            options_list=["--kv-spc-secret-name"],
+            help="The Key Vault secret *name* to use as the default SPC secret. "
             "If the secret does not exist, it will be created with a cryptographically secure placeholder value.",
             arg_group="Key Vault CSI Driver",
         )

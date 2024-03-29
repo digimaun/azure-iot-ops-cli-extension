@@ -152,7 +152,7 @@ def mocked_prepare_keyvault_secret(mocker):
     patched = mocker.patch("azext_edge.edge.providers.orchestration.base.prepare_keyvault_secret", autospec=True)
 
     def handle_return(*args, **kwargs):
-        return kwargs["keyvault_sat_secret_name"]
+        return kwargs["keyvault_spc_secret_name"]
 
     patched.side_effect = handle_return
     yield patched

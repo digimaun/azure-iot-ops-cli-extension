@@ -123,7 +123,7 @@ def test_configure_cluster_secrets(mocker, mocked_base_namespace_functions, mock
 
     cluster_namespace = generate_random_string()
     cluster_secret_ref = generate_random_string()
-    keyvault_sat_secret_name = generate_random_string()
+    keyvault_spc_secret_name = generate_random_string()
     keyvault_resource_id = generate_random_string()
     sp_record = mocker.Mock(
         client_id=generate_random_string(), secret=generate_random_string(), tenant_id=generate_random_string()
@@ -132,7 +132,7 @@ def test_configure_cluster_secrets(mocker, mocked_base_namespace_functions, mock
         cluster_namespace=cluster_namespace,
         cluster_secret_ref=cluster_secret_ref,
         cluster_akv_secret_class_name=generate_random_string(),
-        keyvault_sat_secret_name=keyvault_sat_secret_name,
+        keyvault_spc_secret_name=keyvault_spc_secret_name,
         keyvault_resource_id=keyvault_resource_id,
         sp_record=sp_record,
     )
@@ -166,7 +166,7 @@ def test_configure_cluster_secrets_error(mocked_keyvault_api):
             cluster_namespace=generate_random_string(),
             cluster_secret_ref=generate_random_string(),
             cluster_akv_secret_class_name=generate_random_string(),
-            keyvault_sat_secret_name=generate_random_string(),
+            keyvault_spc_secret_name=generate_random_string(),
             keyvault_resource_id=generate_random_string(),
             sp_record=generate_random_string(),
         )
@@ -526,7 +526,7 @@ def test_prepare_keyvault_secret(mocked_cmd, mocked_send_raw_request, secret_nam
     deployment_name = ".".join(generate_random_string())
     vault_uri = generate_random_string()
     result = prepare_keyvault_secret(
-        cmd=mocked_cmd, deployment_name=deployment_name, vault_uri=vault_uri, keyvault_sat_secret_name=secret_name
+        cmd=mocked_cmd, deployment_name=deployment_name, vault_uri=vault_uri, keyvault_spc_secret_name=secret_name
     )
     if secret_name:
         get_kwargs = mocked_send_raw_request.call_args_list[0].kwargs
