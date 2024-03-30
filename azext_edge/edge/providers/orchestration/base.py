@@ -5,6 +5,7 @@
 # ----------------------------------------------------------------------------------------------
 
 import json
+import logging
 from time import sleep
 from typing import TYPE_CHECKING, List, NamedTuple, Optional, Tuple
 
@@ -61,6 +62,7 @@ DEFAULT_POLL_WAIT_SEC = 15
 EXTENSION_API_VERSION = "2022-11-01"  # TODO: fun testing with newer api
 
 IOT_OPERATIONS_EXTENSION_PREFIX = "microsoft.iotoperations"
+PROPAGATION_DELAY_SEC = 20
 
 
 class ServicePrincipal(NamedTuple):
@@ -300,8 +302,7 @@ def prepare_sp(cmd, deployment_name: str, **kwargs) -> ServicePrincipal:
             body=json.dumps({"passwordCredential": {"displayName": deployment_name, "endDateTime": timestamp_str}}),
         )
         sp_secret = add_secret_op.json()["secretText"]
-        # For secret propagation
-        sleep(10)
+        sleep(PROPAGATION_DELAY_SEC)
 
     return ServicePrincipal(
         client_id=sp_app_id,
@@ -360,7 +361,7 @@ def prepare_keyvault_access_policy(
     subscription_id: str, keyvault_resource: dict, keyvault_resource_id: str, sp_record: ServicePrincipal, **kwargs
 ) -> str:
     resource_client = get_resource_client(subscription_id=subscription_id)
-    vault_uri = keyvault_resource["properties"]["vaultUri"]
+    vault_uri: str = keyvault_resource["properties"]["vaultUri"]
     keyvault_access_policies: List[dict] = keyvault_resource["properties"].get("accessPolicies", [])
 
     add_access_policy = True
@@ -383,6 +384,7 @@ def prepare_keyvault_access_policy(
             api_version=KEYVAULT_CLOUD_API_VERSION,
             parameters={"properties": {"accessPolicies": keyvault_access_policies}},
         ).result()
+        sleep(PROPAGATION_DELAY_SEC)
 
     return vault_uri
 
@@ -392,15 +394,15 @@ def prepare_keyvault_secret(
 ) -> str:
     from azure.cli.core.util import send_raw_request
 
-    url = vault_uri + "/secrets/{0}{1}?api-version=7.4"
+    url = vault_uri + "secrets/{0}{1}?api-version=7.4"
     if keyvault_spc_secret_name:
-        get_secretver: dict = send_raw_request(
+        get_secret_version: dict = send_raw_request(
             cli_ctx=cmd.cli_ctx,
             method="GET",
             url=url.format(keyvault_spc_secret_name, "/versions"),
             resource="https://vault.azure.net",
         ).json()
-        if not get_secretver.get("value"):
+        if not get_secret_version.get("value"):
             send_raw_request(
                 cli_ctx=cmd.cli_ctx,
                 method="PUT",
@@ -421,26 +423,38 @@ def prepare_keyvault_secret(
     return keyvault_spc_secret_name
 
 
-def test_secret_via_sp(cmd, vault_uri: str, keyvault_spc_secret_name: str, sp_record: ServicePrincipal, **kwargs):
+def test_secret_via_sp(cmd, vault_uri: str, keyvault_spc_secret_name: str, sp_record: ServicePrincipal):
     from azure.cli.core.util import send_raw_request
 
-    url = vault_uri + "/secrets/{0}{1}?api-version=7.4"
+    identity_logger = logging.getLogger("azure.identity")
+    identity_logger_level = identity_logger.getEffectiveLevel()
+    identity_logger.setLevel(logging.ERROR)
 
-    # Use SP record to generate
     auth_token = get_token_from_sp_credential(
         tenant_id=sp_record.tenant_id,
         client_id=sp_record.client_id,
         client_secret=sp_record.secret,
         scope="https://vault.azure.net/.default",
     )
-    import pdb; pdb.set_trace()
-    get_secretver: dict = send_raw_request(
-        cli_ctx=cmd.cli_ctx,
-        method="GET",
-        headers=[f"Authorization=Bearer {auth_token}"],  # Header format...
-        url=url.format(keyvault_spc_secret_name, "/versions"),
-    ).json()
-    import pdb; pdb.set_trace()
+    identity_logger.setLevel(identity_logger_level)
+
+    kv_secret_url = vault_uri + "secrets/{0}{1}?api-version=7.4"
+    try:
+        send_raw_request(
+            cli_ctx=cmd.cli_ctx,
+            method="GET",
+            headers=[f"Authorization=Bearer {auth_token}"],  # Expected header format :)
+            url=kv_secret_url.format(keyvault_spc_secret_name, "/versions"),
+        )
+    except HTTPError as e:
+        error_msg = f"""
+        The following error indicates a failure to fetch the default SPC secret from Key Vault. "
+        If no access policy exists for the SP used to setup the CSI driver, init will create a suitable access policy
+        given the logged-in principal has permission to do so.
+
+        {str(e)}"""
+
+        raise ValidationError(error_msg)
 
 
 # TODO: should be in utils
