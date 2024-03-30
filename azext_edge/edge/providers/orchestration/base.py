@@ -7,7 +7,7 @@
 import json
 import logging
 from time import sleep
-from typing import TYPE_CHECKING, List, NamedTuple, Optional, Tuple
+from typing import List, NamedTuple, Optional, Tuple
 
 from azure.cli.core.azclierror import HTTPError, ValidationError
 from knack.log import get_logger
@@ -19,7 +19,11 @@ from ...util import (
     get_timestamp_now_utc,
     read_file_content,
 )
-from ...util.az_client import get_resource_client, get_token_from_sp_credential
+from ...util.az_client import (
+    get_resource_client,
+    get_token_from_sp_credential,
+    wait_for_terminal_state,
+)
 from ..base import (
     create_cluster_namespace,
     create_namespaced_configmap,
@@ -47,21 +51,13 @@ from .connected_cluster import ConnectedCluster
 logger = get_logger(__name__)
 
 
-if TYPE_CHECKING:
-    from azure.core.polling import LROPoller
-    from azure.mgmt.resource.resources.models import GenericResource
-
+EXTENSION_API_VERSION = "2022-11-01"  # TODO: fun testing with newer api
+IOT_OPERATIONS_EXTENSION_PREFIX = "microsoft.iotoperations"
 
 # TODO: pull out into keyvault file (with other related funcs)
 KEYVAULT_CLOUD_API_VERSION = "2022-07-01"
 KEYVAULT_ARC_EXTENSION_VERSION = "1.5.1"
 
-DEFAULT_POLL_RETRIES = 240
-DEFAULT_POLL_WAIT_SEC = 15
-
-EXTENSION_API_VERSION = "2022-11-01"  # TODO: fun testing with newer api
-
-IOT_OPERATIONS_EXTENSION_PREFIX = "microsoft.iotoperations"
 PROPAGATION_DELAY_SEC = 20
 
 
@@ -362,6 +358,9 @@ def prepare_keyvault_access_policy(
 ) -> str:
     resource_client = get_resource_client(subscription_id=subscription_id)
     vault_uri: str = keyvault_resource["properties"]["vaultUri"]
+    if vault_uri[-1] == "/":
+        vault_uri = vault_uri[:-1]
+
     keyvault_access_policies: List[dict] = keyvault_resource["properties"].get("accessPolicies", [])
 
     add_access_policy = True
@@ -394,7 +393,7 @@ def prepare_keyvault_secret(
 ) -> str:
     from azure.cli.core.util import send_raw_request
 
-    url = vault_uri + "secrets/{0}{1}?api-version=7.4"
+    url = vault_uri + "/secrets/{0}{1}?api-version=7.4"
     if keyvault_spc_secret_name:
         get_secret_version: dict = send_raw_request(
             cli_ctx=cmd.cli_ctx,
@@ -438,7 +437,7 @@ def test_secret_via_sp(cmd, vault_uri: str, keyvault_spc_secret_name: str, sp_re
     )
     identity_logger.setLevel(identity_logger_level)
 
-    kv_secret_url = vault_uri + "secrets/{0}{1}?api-version=7.4"
+    kv_secret_url = vault_uri + "/secrets/{0}{1}?api-version=7.4"
     try:
         send_raw_request(
             cli_ctx=cmd.cli_ctx,
@@ -541,18 +540,6 @@ def throw_if_iotops_deployed(connected_cluster: ConnectedCluster):
                     "Detected existing IoT Operations deployment. "
                     "Remove IoT Operations or use a different connected cluster to continue.\n"
                 )
-
-
-# TODO: should be in utils
-def wait_for_terminal_state(poller: "LROPoller") -> "GenericResource":
-    # resource client does not handle sigint well
-    counter = 0
-    while counter < DEFAULT_POLL_RETRIES:
-        sleep(DEFAULT_POLL_WAIT_SEC)
-        counter = counter + 1
-        if poller.done():
-            break
-    return poller.result()
 
 
 def verify_custom_locations_enabled():

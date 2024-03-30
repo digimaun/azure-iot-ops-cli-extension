@@ -30,6 +30,11 @@ def mocked_wait_for_terminal_state(mocker):
 
 
 @pytest.fixture
+def mocked_sleep(mocker):
+    yield mocker.patch(f"{BASE_PATH}.sleep")
+
+
+@pytest.fixture
 def mocked_get_tenant_id(mocker):
     yield mocker.patch(f"{BASE_PATH}.get_tenant_id", return_value=generate_random_string())
 
@@ -223,7 +228,15 @@ def test_configure_cluster_tls(mocked_base_namespace_functions):
 @pytest.mark.parametrize("secret", [None, generate_random_string()])
 @pytest.mark.parametrize("secret_valid_days", [365, 100])
 def test_prepare_sp(
-    mocker, mocked_cmd, mocked_get_tenant_id, mocked_send_raw_request, app_id, object_id, secret, secret_valid_days
+    mocker,
+    mocked_cmd,
+    mocked_get_tenant_id,
+    mocked_send_raw_request,
+    mocked_sleep,
+    app_id,
+    object_id,
+    secret,
+    secret_valid_days,
 ):
     import datetime
 
@@ -283,6 +296,7 @@ def test_prepare_sp(
         body = json.loads(post_call["body"])
         assert body["passwordCredential"]["displayName"] == deployment_name
         assert body["passwordCredential"]["endDateTime"]
+        mocked_sleep.assert_called_once()
         call_count += 1
 
     assert mocked_send_raw_request.call_count == call_count
@@ -487,7 +501,7 @@ def test_validate_keyvault_permission_model_error(mocked_resource_management_cli
     indirect=True,
 )
 @pytest.mark.parametrize("access_policy", [False, True])
-def test_prepare_keyvault_access_policy(mocker, mocked_resource_management_client, access_policy):
+def test_prepare_keyvault_access_policy(mocker, mocked_resource_management_client, mocked_sleep, access_policy):
     from azext_edge.edge.providers.orchestration.base import prepare_keyvault_access_policy
 
     sp_record = mocker.Mock(object_id=generate_random_string(), tenant_id=generate_random_string())
@@ -505,6 +519,7 @@ def test_prepare_keyvault_access_policy(mocker, mocked_resource_management_clien
     assert len(keyvault_resource["properties"]["accessPolicies"]) == 1
     if not access_policy:
         mocked_resource_management_client.resources.begin_create_or_update_by_id.assert_called_once()
+        mocked_sleep.assert_called_once()
         assert keyvault_resource["properties"]["accessPolicies"][0]["tenantId"] == sp_record.tenant_id
         assert keyvault_resource["properties"]["accessPolicies"][0]["objectId"] == sp_record.object_id
         assert keyvault_resource["properties"]["accessPolicies"][0]["permissions"]
@@ -678,24 +693,6 @@ def test_get_tenant_id(mocker):
 
     result = get_tenant_id()
     assert result == tenant_id
-
-
-@pytest.mark.parametrize("done", [True, False])
-def test_wait_for_terminal_state(mocker, done):
-    # could be fixture with param
-    sleep_patch = mocker.patch(f"{BASE_PATH}.sleep")
-    poll_num = 10
-    mocker.patch(f"{BASE_PATH}.DEFAULT_POLL_RETRIES", poll_num)
-
-    poller = mocker.Mock()
-    poller.done.return_value = done
-    poller.result.return_value = generate_random_string()
-
-    from azext_edge.edge.providers.orchestration.base import wait_for_terminal_state
-
-    result = wait_for_terminal_state(poller)
-    assert result == poller.result.return_value
-    assert sleep_patch.call_count == (1 if done else poll_num)
 
 
 @pytest.mark.parametrize(

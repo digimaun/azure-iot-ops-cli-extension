@@ -216,6 +216,12 @@ def mocked_verify_arc_cluster_config(mocker):
 
 
 @pytest.fixture
+def mocked_test_secret_via_sp(mocker):
+    patched = mocker.patch("azext_edge.edge.providers.orchestration.base.test_secret_via_sp", autospec=True)
+    yield patched
+
+
+@pytest.fixture
 def spy_get_current_template_copy(mocker):
     from azext_edge.edge.providers.orchestration import work
 

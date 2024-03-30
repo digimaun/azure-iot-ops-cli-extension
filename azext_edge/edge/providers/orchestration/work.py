@@ -327,7 +327,7 @@ class WorkManager:
                         keyvault_spc_secret_name=keyvault_spc_secret_name,
                         sp_record=sp_record,
                     )
-                    return
+
                     self._completed_steps[WorkStepKey.KV_CLOUD_TEST] = 1
                     self.render_display(category=WorkCategoryKey.CSI_DRIVER)
 
