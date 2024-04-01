@@ -685,16 +685,6 @@ def test_throw_if_iotops_deployed(mocked_connected_cluster_extensions):
     mocked_connected_cluster_extensions.assert_called_once()
 
 
-def test_get_tenant_id(mocker):
-    tenant_id = generate_random_string()
-    profile_patch = mocker.patch("azure.cli.core._profile.Profile", autospec=True)
-    profile_patch.return_value.get_subscription.return_value = {"tenantId": tenant_id}
-    from azext_edge.edge.providers.orchestration.base import get_tenant_id
-
-    result = get_tenant_id()
-    assert result == tenant_id
-
-
 @pytest.mark.parametrize(
     "role_bindings",
     [

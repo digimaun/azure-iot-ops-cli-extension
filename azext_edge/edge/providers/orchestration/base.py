@@ -23,6 +23,7 @@ from ...util.az_client import (
     get_resource_client,
     get_token_from_sp_credential,
     wait_for_terminal_state,
+    get_tenant_id,
 )
 from ..base import (
     create_cluster_namespace,
@@ -454,15 +455,6 @@ def test_secret_via_sp(cmd, vault_uri: str, keyvault_spc_secret_name: str, sp_re
         {str(e)}"""
 
         raise ValidationError(error_msg)
-
-
-# TODO: should be in utils
-def get_tenant_id():
-    from azure.cli.core._profile import Profile
-
-    profile = Profile()
-    sub = profile.get_subscription()
-    return sub["tenantId"]
 
 
 def deploy_template(

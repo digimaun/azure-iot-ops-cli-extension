@@ -57,3 +57,11 @@ def wait_for_terminal_state(poller: "LROPoller") -> "GenericResource":
         if poller.done():
             break
     return poller.result()
+
+
+def get_tenant_id():
+    from azure.cli.core._profile import Profile
+
+    profile = Profile()
+    sub = profile.get_subscription()
+    return sub["tenantId"]
