@@ -808,3 +808,11 @@ def test_verify_arc_cluster_config(mocker, test_scenario):
 
     verify_arc_cluster_config(connected_cluster)
     get_config_map_patch.assert_called_once()
+
+
+
+def test_eval_secret_via_sp(mocker, mocked_cmd, ):
+
+    from azext_edge.edge.providers.orchestration.base import eval_secret_via_sp
+
+    eval_secret_via_sp()

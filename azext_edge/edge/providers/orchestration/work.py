@@ -204,7 +204,7 @@ class WorkManager:
             prepare_keyvault_secret,
             prepare_sp,
             provision_akv_csi_driver,
-            test_secret_via_sp,
+            eval_secret_via_sp,
             throw_if_iotops_deployed,
             validate_keyvault_permission_model,
             verify_arc_cluster_config,
@@ -319,7 +319,7 @@ class WorkManager:
                     self.complete_step(WorkCategoryKey.CSI_DRIVER, WorkStepKey.KV_CLOUD_SEC)
 
                     # WorkStepKey.KV_CLOUD_TEST
-                    keyvault_spc_secret_name = test_secret_via_sp(
+                    keyvault_spc_secret_name = eval_secret_via_sp(
                         cmd=self._cmd,
                         vault_uri=vault_uri,
                         keyvault_spc_secret_name=keyvault_spc_secret_name,

@@ -423,7 +423,7 @@ def prepare_keyvault_secret(
     return keyvault_spc_secret_name
 
 
-def test_secret_via_sp(cmd, vault_uri: str, keyvault_spc_secret_name: str, sp_record: ServicePrincipal):
+def eval_secret_via_sp(cmd, vault_uri: str, keyvault_spc_secret_name: str, sp_record: ServicePrincipal):
     from azure.cli.core.util import send_raw_request
 
     identity_logger = logging.getLogger("azure.identity")
@@ -449,8 +449,8 @@ def test_secret_via_sp(cmd, vault_uri: str, keyvault_spc_secret_name: str, sp_re
     except HTTPError as e:
         error_msg = f"""
         The following error indicates a failure to fetch the default SPC secret from Key Vault. "
-        If no access policy exists for the SP used to setup the CSI driver, init will create a suitable access policy
-        given the logged-in principal has permission to do so.
+        If no access policy exists for the service principal used to setup the CSI driver,
+        init will create a suitable access policy given the logged-in principal has permission to do so.
 
         {str(e)}"""
 
