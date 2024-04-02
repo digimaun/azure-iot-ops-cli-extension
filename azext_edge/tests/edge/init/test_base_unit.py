@@ -5,14 +5,18 @@
 # ----------------------------------------------------------------------------------------------
 
 import json
+
 import pytest
 from azure.cli.core.azclierror import HTTPError, ValidationError
-from azext_edge.edge.providers.orchestration.connected_cluster import ConnectedCluster
+from requests.models import Response
+
+from azext_edge.edge.providers.orchestration.base import ServicePrincipal
 from azext_edge.edge.providers.orchestration.common import (
+    GRAPH_V1_APP_ENDPOINT,
     GRAPH_V1_ENDPOINT,
     GRAPH_V1_SP_ENDPOINT,
-    GRAPH_V1_APP_ENDPOINT,
 )
+from azext_edge.edge.providers.orchestration.connected_cluster import ConnectedCluster
 
 from ...generators import generate_random_string, get_zeroed_subscription
 
@@ -78,7 +82,10 @@ def mocked_base_namespace_functions(mocker, request):
 def test_provision_akv_csi_driver(
     mocked_resource_management_client, mocked_wait_for_terminal_state, rotation_poll_interval, extension_name
 ):
-    from azext_edge.edge.providers.orchestration.base import provision_akv_csi_driver, KEYVAULT_ARC_EXTENSION_VERSION
+    from azext_edge.edge.providers.orchestration.base import (
+        KEYVAULT_ARC_EXTENSION_VERSION,
+        provision_akv_csi_driver,
+    )
 
     subscription_id = generate_random_string()
     cluster_name = generate_random_string()
@@ -461,7 +468,9 @@ def test_prepare_ca(mocker, tls_ca_path, tls_ca_key_path):
     indirect=True,
 )
 def test_validate_keyvault_permission_model(mocked_resource_management_client):
-    from azext_edge.edge.providers.orchestration.base import validate_keyvault_permission_model
+    from azext_edge.edge.providers.orchestration.base import (
+        validate_keyvault_permission_model,
+    )
 
     result = validate_keyvault_permission_model(
         subscription_id=generate_random_string(),
@@ -481,7 +490,9 @@ def test_validate_keyvault_permission_model(mocked_resource_management_client):
     indirect=True,
 )
 def test_validate_keyvault_permission_model_error(mocked_resource_management_client):
-    from azext_edge.edge.providers.orchestration.base import validate_keyvault_permission_model
+    from azext_edge.edge.providers.orchestration.base import (
+        validate_keyvault_permission_model,
+    )
 
     with pytest.raises(ValidationError):
         validate_keyvault_permission_model(
@@ -502,7 +513,9 @@ def test_validate_keyvault_permission_model_error(mocked_resource_management_cli
 )
 @pytest.mark.parametrize("access_policy", [False, True])
 def test_prepare_keyvault_access_policy(mocker, mocked_resource_management_client, mocked_sleep, access_policy):
-    from azext_edge.edge.providers.orchestration.base import prepare_keyvault_access_policy
+    from azext_edge.edge.providers.orchestration.base import (
+        prepare_keyvault_access_policy,
+    )
 
     sp_record = mocker.Mock(object_id=generate_random_string(), tenant_id=generate_random_string())
     keyvault_resource = {"properties": {"vaultUri": generate_random_string()}}
@@ -657,9 +670,9 @@ def test_verify_cluster_and_use_location(mocked_connected_cluster_location, loca
 )
 def test_throw_if_iotops_deployed(mocked_connected_cluster_extensions):
     from azext_edge.edge.providers.orchestration.base import (
-        throw_if_iotops_deployed,
         IOT_OPERATIONS_EXTENSION_PREFIX,
         ConnectedCluster,
+        throw_if_iotops_deployed,
     )
 
     kwargs = {
@@ -705,7 +718,9 @@ def test_throw_if_iotops_deployed(mocked_connected_cluster_extensions):
 )
 def test_verify_custom_locations_enabled(mocker, role_bindings):
     get_binding_patch = mocker.patch(f"{BASE_PATH}.get_bindings", return_value=role_bindings)
-    from azext_edge.edge.providers.orchestration.base import verify_custom_locations_enabled
+    from azext_edge.edge.providers.orchestration.base import (
+        verify_custom_locations_enabled,
+    )
 
     if not role_bindings or (role_bindings and not role_bindings["items"]):
         with pytest.raises(ValidationError):
@@ -810,9 +825,59 @@ def test_verify_arc_cluster_config(mocker, test_scenario):
     get_config_map_patch.assert_called_once()
 
 
+@pytest.mark.parametrize("http_error", [None, 401, 403, 500])
+def test_eval_secret_via_sp(mocker, mocked_cmd, http_error):
 
-def test_eval_secret_via_sp(mocker, mocked_cmd, ):
+    def assert_mocked_get_token_from_sp_credential():
+        assert mocked_get_token_from_sp_credential.call_count == 1
+        assert mocked_get_token_from_sp_credential.call_args.kwargs["tenant_id"] == sp_record.tenant_id
+        assert mocked_get_token_from_sp_credential.call_args.kwargs["client_id"] == sp_record.client_id
+        assert mocked_get_token_from_sp_credential.call_args.kwargs["client_secret"] == sp_record.secret
+        assert mocked_get_token_from_sp_credential.call_args.kwargs["scope"] == "https://vault.azure.net/.default"
+
+    mock_token = generate_random_string()
+    mocked_get_token_from_sp_credential = mocker.patch(
+        f"{BASE_PATH}.get_token_from_sp_credential", return_value=mock_token
+    )
+    mocked_send_raw_request = mocker.patch("azure.cli.core.util.send_raw_request")
+
+    if http_error:
+        test_response = Response()
+        test_response.status_code = http_error
+        mocked_send_raw_request.side_effect = HTTPError(error_msg=generate_random_string(), response=test_response)
 
     from azext_edge.edge.providers.orchestration.base import eval_secret_via_sp
 
-    eval_secret_via_sp()
+    vault_uri = generate_random_string()
+    kv_spc_secret_name = generate_random_string()
+    sp_record = ServicePrincipal(
+        client_id=generate_random_string(),
+        object_id=generate_random_string(),
+        tenant_id=generate_random_string(),
+        secret=generate_random_string(),
+        created_app=False,
+    )
+
+    if http_error:
+        with pytest.raises(ValidationError) as ve:
+            eval_secret_via_sp(
+                cmd=mocked_cmd, vault_uri=vault_uri, keyvault_spc_secret_name=kv_spc_secret_name, sp_record=sp_record
+            )
+            assert_mocked_get_token_from_sp_credential()
+        if http_error in [401, 403]:
+            assert "auth failure" in str(ve.value)
+        return
+
+    eval_secret_via_sp(
+        cmd=mocked_cmd, vault_uri=vault_uri, keyvault_spc_secret_name=kv_spc_secret_name, sp_record=sp_record
+    )
+    assert_mocked_get_token_from_sp_credential()
+
+    assert mocked_send_raw_request.call_count == 1
+    assert mocked_send_raw_request.call_args.kwargs["cli_ctx"]
+    assert mocked_send_raw_request.call_args.kwargs["method"] == "GET"
+    assert mocked_send_raw_request.call_args.kwargs["headers"] == [f"Authorization=Bearer {mock_token}"]
+    assert (
+        mocked_send_raw_request.call_args.kwargs["url"]
+        == f"{vault_uri}/secrets/{kv_spc_secret_name}/versions?api-version=7.4"
+    )

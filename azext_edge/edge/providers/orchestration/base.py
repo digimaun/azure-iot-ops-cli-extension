@@ -7,7 +7,7 @@
 import json
 import logging
 from time import sleep
-from typing import List, NamedTuple, Optional, Tuple
+from typing import TYPE_CHECKING, List, NamedTuple, Optional, Tuple
 
 from azure.cli.core.azclierror import HTTPError, ValidationError
 from knack.log import get_logger
@@ -21,9 +21,9 @@ from ...util import (
 )
 from ...util.az_client import (
     get_resource_client,
+    get_tenant_id,
     get_token_from_sp_credential,
     wait_for_terminal_state,
-    get_tenant_id,
 )
 from ..base import (
     create_cluster_namespace,
@@ -50,6 +50,9 @@ from .components import (
 from .connected_cluster import ConnectedCluster
 
 logger = get_logger(__name__)
+
+if TYPE_CHECKING:
+    from requests.models import Response
 
 
 EXTENSION_API_VERSION = "2022-11-01"  # TODO: fun testing with newer api
@@ -438,23 +441,27 @@ def eval_secret_via_sp(cmd, vault_uri: str, keyvault_spc_secret_name: str, sp_re
     )
     identity_logger.setLevel(identity_logger_level)
 
-    kv_secret_url = vault_uri + "/secrets/{0}{1}?api-version=7.4"
+    kv_secret_url = vault_uri + "/secrets/{0}?api-version=7.4"
     try:
         send_raw_request(
             cli_ctx=cmd.cli_ctx,
             method="GET",
             headers=[f"Authorization=Bearer {auth_token}"],  # Expected header format :)
-            url=kv_secret_url.format(keyvault_spc_secret_name, "/versions"),
+            url=kv_secret_url.format(keyvault_spc_secret_name),
         )
     except HTTPError as e:
-        error_msg = f"""
-        The following error indicates a failure to fetch the default SPC secret from Key Vault. "
-        If no access policy exists for the service principal used to setup the CSI driver,
-        init will create a suitable access policy given the logged-in principal has permission to do so.
-
-        {str(e)}"""
-
-        raise ValidationError(error_msg)
+        error_response: Response = e.response
+        http_error_msg = str(e)
+        if error_response.status_code in [401, 403]:
+            custom_error_msg = (
+                f"{http_error_msg}\n\n"
+                "The error indicates an auth failure to fetch the default SPC secret from Key Vault. "
+                "If no access policy exists for the service principal used to setup the CSI driver"
+                "init will create a suitable access policy given the logged-in principal "
+                "has permission to do so."
+            )
+            raise ValidationError(error_msg=custom_error_msg)
+        raise ValidationError(error_msg=http_error_msg)
 
 
 def deploy_template(
