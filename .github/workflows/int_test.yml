@@ -88,7 +88,7 @@ jobs:
           # default / limited options
           - feature: default
             ca-valid-days: 3
-            kv-sat-secret-name: test-kv-secret
+            kv-spc-secret-name: test-kv-secret
           # test --mq-insecure deployment
           - feature: mq-insecure
             mq-insecure: true
@@ -198,7 +198,7 @@ jobs:
           ca-valid-days: ${{ matrix.ca-valid-days || '' }}
           ca-file: ${{ matrix.ca-file || '' }}
           ca-key-file: ${{ matrix.ca-key-file || '' }}
-          kv-sat-secret-name: ${{ matrix.kv-sat-secret-name || '' }}
+          kv-spc-secret-name: ${{ matrix.kv-spc-secret-name || '' }}
       - name: "Allow cluster to finish provisioning"
         run: |
           sleep 2m
