@@ -59,3 +59,63 @@ class ConnectedCluster:
         result = self.resource_graph.query_resources(query=query)
         if "data" in result and result["data"]:
             return result["data"][0]
+
+    def get_aio_extensions(self) -> Optional[List[dict]]:
+        query = f"""
+        kubernetesconfigurationresources
+        | where type =~ 'microsoft.kubernetesconfiguration/extensions'
+        | where id startswith '{self.resource_id}'
+        | where properties.ExtensionType startswith "microsoft.iotoperations" 
+            or properties.ExtensionType =~ "microsoft.deviceregistry.assets"
+            or properties.ExtensionType =~ "microsoft.azurekeyvaultsecretsprovider"
+        """
+        # @digimaun TODO microsoft.azurekeyvaultsecretsprovider
+
+        result = self.resource_graph.query_resources(query=query)
+        if "data" in result and result["data"]:
+            return result["data"]
+
+    def get_aio_custom_locations(self) -> Optional[List[dict]]:
+        query = f"""
+        resources
+        | where type =~ 'microsoft.extendedlocation/customlocations'
+        | where properties.hostResourceId =~ '{self.resource_id}'
+        | extend clusterExtensionIds=properties.clusterExtensionIds
+        | mv-expand clusterExtensionIds
+        | extend clusterExtensionId = tolower(clusterExtensionIds)
+        | join kind=inner(
+            extendedlocationresources
+            | where type =~ 'microsoft.extendedlocation/customLocations/enabledResourcetypes'
+            | project clusterExtensionId = tolower(properties.clusterExtensionId), extensionType = tolower(properties.extensionType)
+            | where extensionType startswith 'microsoft.iotoperations'
+                or extensionType =~ "microsoft.deviceregistry.assets"
+        ) on clusterExtensionId
+        | distinct id
+        """
+
+        result = self.resource_graph.query_resources(query=query)
+        if "data" in result and result["data"]:
+            return result["data"]
+
+    def get_aio_resources(self, custom_location_id: str) -> Optional[List[dict]]:
+        query = f"""
+        resources
+        | where extendedLocation.name =~ '{custom_location_id}'
+        | where type startswith 'microsoft.iotoperations'
+            or type startswith 'microsoft.deviceregistry.assets'
+        """
+
+        result = self.resource_graph.query_resources(query=query)
+        if "data" in result and result["data"]:
+            return result["data"]
+
+    def get_resource_sync_rules(self, custom_location_id: str) -> Optional[List[dict]]:
+        query = f"""
+        resources
+        | where type =~ "microsoft.extendedlocation/customlocations/resourcesyncrules"
+        | where id startswith '{custom_location_id}'
+        """
+
+        result = self.resource_graph.query_resources(query=query)
+        if "data" in result and result["data"]:
+            return result["data"]
