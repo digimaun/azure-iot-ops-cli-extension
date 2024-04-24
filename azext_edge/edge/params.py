@@ -531,6 +531,12 @@ def load_iotops_arguments(self, _):
             help="The path to a custom IoT Operations deployment template. Intended for advanced use cases.",
             deprecate_info=context.deprecate(hide=True),
         )
+        context.argument(
+            "parameters_path",
+            options_list=["--parameters-file"],
+            help="The path to a custom IoT Operations parameters file. Intended for advanced use cases.",
+            deprecate_info=context.deprecate(hide=True),
+        )
 
     with self.argument_context("iot ops verify-host") as context:
         context.argument(
