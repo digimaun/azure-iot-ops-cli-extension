@@ -4,16 +4,21 @@
 # Licensed under the MIT License. See License file in the project root for license information.
 # ----------------------------------------------------------------------------------------------
 
-from typing import Dict, List, NamedTuple, Union
+from typing import Dict, List, NamedTuple, Union, Optional
 
 from rich.tree import Tree
 
 from .connected_cluster import ConnectedCluster
+from knack.log import get_logger
+
+logger = get_logger(__name__)
 
 
 class IoTOperationsResource(NamedTuple):
     resource_id: str
-    display_id: str
+    display_name: str
+    api_version: str
+    segments: Optional[int] = None
 
 
 class IoTOperationsResourceMap:
@@ -36,32 +41,31 @@ class IoTOperationsResourceMap:
     @property
     def extensions(self) -> List[IoTOperationsResource]:
         result = []
-        filter_prefix = (
-            f"{self.base_id_prefix}/Microsoft.Kubernetes/ConnectedClusters/{self.cluster_name}"
-            "/providers/Microsoft.KubernetesConfiguration/Extensions/"
-        ).lower()
         if "extensions" in self._resource_map and self._resource_map["extensions"]:
-            for ext_id in self._resource_map["extensions"]:
+            for ext in self._resource_map["extensions"]:
                 result.append(
-                    IoTOperationsResource(resource_id=ext_id, display_id=ext_id.lower().split(filter_prefix)[-1])
+                    IoTOperationsResource(
+                        resource_id=ext["id"], display_name=ext["name"], api_version=ext["apiVersion"]
+                    )
                 )
         return result
 
     @property
     def custom_locations(self) -> List[IoTOperationsResource]:
         result = []
-        filter_prefix = f"{self.base_id_prefix}/Microsoft.ExtendedLocation/customLocations/".lower()
         if "customLocations" in self._resource_map and self._resource_map["customLocations"]:
             for cl_id in self._resource_map["customLocations"]:
                 result.append(
-                    IoTOperationsResource(resource_id=cl_id, display_id=cl_id.lower().split(filter_prefix)[-1])
+                    IoTOperationsResource(
+                        resource_id=cl_id,
+                        display_name=self._resource_map["customLocations"][cl_id]["name"],
+                        api_version=self._resource_map["customLocations"][cl_id]["apiVersion"],
+                    )
                 )
         return result
 
     def get_resource_sync_rules(self, custom_location_id: str) -> List[IoTOperationsResource]:
         result = []
-        filter_prefix = f"{custom_location_id}/resourceSyncRules/".lower()
-
         if (
             "customLocations" in self._resource_map
             and self._resource_map["customLocations"]
@@ -70,49 +74,98 @@ class IoTOperationsResourceMap:
             and "resourceSyncRules" in self._resource_map["customLocations"][custom_location_id]
             and self._resource_map["customLocations"][custom_location_id]["resourceSyncRules"]
         ):
-            for rsr_id in self._resource_map["customLocations"][custom_location_id]["resourceSyncRules"]:
+            for rsr in self._resource_map["customLocations"][custom_location_id]["resourceSyncRules"]:
                 result.append(
-                    IoTOperationsResource(resource_id=rsr_id, display_id=rsr_id.lower().split(filter_prefix)[-1])
+                    IoTOperationsResource(
+                        resource_id=rsr["id"], display_name=rsr["name"], api_version=rsr["apiVersion"]
+                    )
                 )
         return result
 
-    def refresh_related_resource_ids(self) -> Dict[str, Union[List[str], Dict[str, List[str]]]]:
-        result = {}
-        extensions = self.connected_cluster.get_aio_extensions()
-        if extensions:
-            result["extensions"] = [ext["id"] for ext in extensions]
-        custom_locations = self.connected_cluster.get_aio_custom_locations()
-        if custom_locations:
-            result["customLocations"] = {}
-            custom_location_ids = [cl["id"] for cl in custom_locations]
-            for cl_id in custom_location_ids:
-                result["customLocations"][cl_id] = {}
-                cl_sync_rules = self.connected_cluster.get_resource_sync_rules(cl_id)
-                if cl_sync_rules:
-                    result["customLocations"][cl_id]["resourceSyncRules"] = [
-                        cl_sync["id"] for cl_sync in cl_sync_rules
-                    ]
+    def get_resources(self, custom_location_id: str) -> List[IoTOperationsResource]:
+        result: List[IoTOperationsResource] = []
+        if (
+            "customLocations" in self._resource_map
+            and self._resource_map["customLocations"]
+            and custom_location_id in self._resource_map["customLocations"]
+            and self._resource_map["customLocations"][custom_location_id]
+            and "resources" in self._resource_map["customLocations"][custom_location_id]
+            and self._resource_map["customLocations"][custom_location_id]["resources"]
+        ):
+            for resource in self._resource_map["customLocations"][custom_location_id]["resources"]:
+                result.append(
+                    IoTOperationsResource(
+                        resource_id=resource["id"],
+                        display_name=resource["name"],
+                        api_version=resource["apiVersion"],
+                        segments=len(resource["id"].split("/")),
+                    )
+                )
 
-                cl_resources = self.connected_cluster.get_aio_resources(cl_id)
-                if cl_resources:
-                    result["customLocations"][cl_id]["resources"] = [cl_r["id"] for cl_r in cl_resources]
+            result = sorted(result, key=lambda r: (r.segments, r.display_name.lower()), reverse=True)
 
         return result
 
-    def build_tree(self):
-        tree = Tree(f"[green]{self.cluster_name}[/green]")
-        extensions_node = tree.add(label="[cyan]extensions[/cyan]")
-        [extensions_node.add(ext.display_id) for ext in self.extensions]
+    def refresh_related_resource_ids(
+        self,
+    ) -> Dict[str, Union[List[Dict[str, str]], Dict[str, Dict[str, Union[List[Dict[str, str]], str]]]]]:
+        result = {}
+        extensions = self.connected_cluster.get_aio_extensions()
 
+        if extensions:
+            result["extensions"] = []
+            for ext in extensions:
+                ext_map = {"id": ext["id"], "name": ext["name"], "apiVersion": ext["apiVersion"]}
+                result["extensions"].append(ext_map)
+
+        custom_locations = self.connected_cluster.get_aio_custom_locations()
+        if custom_locations:
+            result["customLocations"] = {}
+            for cl in custom_locations:
+                result["customLocations"][cl["id"]] = {"name": cl["name"], "apiVersion": cl["apiVersion"]}
+
+                cl_sync_rules = self.connected_cluster.get_resource_sync_rules(cl["id"])
+                if cl_sync_rules:
+                    result["customLocations"][cl["id"]]["resourceSyncRules"] = []
+                    for sync_rule in cl_sync_rules:
+                        sync_rule_map = {
+                            "id": sync_rule["id"],
+                            "name": sync_rule["name"],
+                            "apiVersion": sync_rule["apiVersion"],
+                        }
+                        result["customLocations"][cl["id"]]["resourceSyncRules"].append(sync_rule_map)
+
+                cl_resources = self.connected_cluster.get_aio_resources(cl["id"])
+                if cl_resources:
+                    result["customLocations"][cl["id"]]["resources"] = []
+                    for resource in cl_resources:
+                        res_map = {
+                            "id": resource["id"],
+                            "name": resource["name"],
+                            "apiVersion": resource["apiVersion"],
+                        }
+                        result["customLocations"][cl["id"]]["resources"].append(res_map)
+
+        return result
+
+    def build_tree(self) -> Tree:
+        tree = Tree(f"[green]{self.cluster_name}")
+        extensions_node = tree.add(label="[red]extensions")
+        [extensions_node.add(ext.display_name) for ext in self.extensions]
+
+        root_cl_node = tree.add(label="[red]customLocations")
         custom_locations = self.custom_locations
         if custom_locations:
-            root_cl_node = tree.add(label="[cyan]customLocations[/cyan]")
-            #import pdb; pdb.set_trace()
             for cl in custom_locations:
-                cl_node = root_cl_node.add(cl.display_id)
+                cl_node = root_cl_node.add(cl.display_name)
                 resource_sync_rules = self.get_resource_sync_rules(cl.resource_id)
+                rsr_node = cl_node.add("[red]resourceSyncRules")
                 if resource_sync_rules:
-                    rsr_node = cl_node.add("[cyan]resourceSyncRules[/cyan]")
-                    [rsr_node.add(rsr.display_id) for rsr in resource_sync_rules]
+                    [rsr_node.add(rsr.display_name) for rsr in resource_sync_rules]
+
+                resource_node = cl_node.add("[red]resources")
+                cl_resources = self.get_resources(cl.resource_id)
+                if cl_resources:
+                    [resource_node.add(resource.display_name) for resource in cl_resources]
 
         return tree
