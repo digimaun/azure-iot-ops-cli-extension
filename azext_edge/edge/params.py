@@ -73,6 +73,11 @@ def load_iotops_arguments(self, _):
             arg_type=get_three_state_flag(),
             help="Force the operation to execute.",
         )
+        context.argument(
+            "instance_name",
+            options_list=["--name", "-n"],
+            help="IoT Operations instance name.",
+        )
 
     with self.argument_context("iot ops support") as context:
         context.argument(
