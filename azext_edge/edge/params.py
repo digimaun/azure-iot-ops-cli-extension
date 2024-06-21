@@ -79,6 +79,15 @@ def load_iotops_arguments(self, _):
             help="IoT Operations instance name.",
         )
 
+    with self.argument_context("iot ops show") as context:
+        context.argument(
+            "show_tree",
+            options_list=["--tree"],
+            arg_type=get_three_state_flag(),
+            help="Use to visualize the IoT Operations topology associated with the instance.",
+        )
+
+
     with self.argument_context("iot ops support") as context:
         context.argument(
             "ops_service",

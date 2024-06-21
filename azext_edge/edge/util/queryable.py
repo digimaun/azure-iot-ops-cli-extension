@@ -22,9 +22,10 @@ class Queryable:
         from azure.cli.core.commands.client_factory import get_subscription_id
 
         self.cmd = cmd
+        self.default_subscription_id: str = get_subscription_id(cli_ctx=cmd.cli_ctx)
+
         if not subscriptions:
-            subscription_id: str = get_subscription_id(cli_ctx=cmd.cli_ctx)
-            subscriptions = [subscription_id]
+            subscriptions = [self.default_subscription_id]
 
         self.subscriptions = subscriptions
         self.resource_graph = ResourceGraph(cmd=cmd, subscriptions=self.subscriptions)

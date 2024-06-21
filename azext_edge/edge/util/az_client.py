@@ -6,6 +6,7 @@
 
 from time import sleep
 from typing import TYPE_CHECKING, Tuple
+import logging
 
 from ...constants import USER_AGENT
 from .common import ensure_azure_namespace_path
@@ -27,11 +28,12 @@ if TYPE_CHECKING:
     from azure.mgmt.resource.resources.models import GenericResource
 
 
-def get_resource_client(subscription_id: str) -> ResourceManagementClient:
+def get_resource_client(subscription_id: str, **kwargs) -> ResourceManagementClient:
     return ResourceManagementClient(
         credential=AZURE_CLI_CREDENTIAL,
         subscription_id=subscription_id,
         user_agent_policy=UserAgentPolicy(user_agent=USER_AGENT),
+        **kwargs,
     )
 
 
