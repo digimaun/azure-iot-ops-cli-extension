@@ -4,16 +4,18 @@
 # Licensed under the MIT License. See License file in the project root for license information.
 # ----------------------------------------------------------------------------------------------
 
+import json
 from time import sleep
-from typing import TYPE_CHECKING, Tuple
-import logging
+from typing import TYPE_CHECKING, List, Tuple
+
+from knack.log import get_logger
 
 from ...constants import USER_AGENT
 from .common import ensure_azure_namespace_path
 
 ensure_azure_namespace_path()
 
-from azure.core.pipeline.policies import UserAgentPolicy
+from azure.core.pipeline.policies import HttpLoggingPolicy, UserAgentPolicy
 from azure.identity import AzureCliCredential, ClientSecretCredential
 from azure.mgmt.authorization import AuthorizationManagementClient
 from azure.mgmt.resource import ResourceManagementClient
@@ -23,12 +25,19 @@ AZURE_CLI_CREDENTIAL = AzureCliCredential()
 POLL_RETRIES = 240
 POLL_WAIT_SEC = 15
 
+logger = get_logger(__name__)
+# logger.setLevel(logging.INFO)
+
+
 if TYPE_CHECKING:
     from azure.core.polling import LROPoller
     from azure.mgmt.resource.resources.models import GenericResource
 
 
 def get_resource_client(subscription_id: str, **kwargs) -> ResourceManagementClient:
+    if "http_logging_policy" not in kwargs:
+        kwargs["http_logging_policy"] = get_default_logging_policy()
+
     return ResourceManagementClient(
         credential=AZURE_CLI_CREDENTIAL,
         subscription_id=subscription_id,
@@ -81,3 +90,51 @@ def get_tenant_id() -> str:
     profile = Profile()
     sub = profile.get_subscription()
     return sub["tenantId"]
+
+
+def get_default_logging_policy() -> HttpLoggingPolicy:
+    http_logging_policy = HttpLoggingPolicy(logger=logger)
+    http_logging_policy.allowed_query_params.add("api-version")
+    http_logging_policy.allowed_query_params.add("$filter")
+    http_logging_policy.allowed_query_params.add("$expand")
+
+    return http_logging_policy
+
+
+class AzMicroMgmtClient:
+    def __init__(self, subscription_id: str, **kwargs):
+        self.resource_client = get_resource_client(subscription_id, **kwargs)
+
+    @classmethod
+    def _get_response_body_text(cls, response, _, *args, **kwargs) -> str:
+        """
+        Apply when requiring the raw response body, to avoid set model deserialization.
+        """
+        return response.http_response.text()
+
+    @classmethod
+    def _enumerate_models(cls, models: list, *args, **kwargs) -> List[dict]:
+        unpacked = []
+        for model in models:
+            m = model.as_dict()
+            m.update(model.additional_properties)
+            unpacked.append(m)
+
+        return unpacked
+
+    def get_resource_by_id(self, resource_id: str, api_version: str) -> dict:
+        text = self.resource_client.resources.get_by_id(
+            resource_id=resource_id,
+            api_version=api_version,
+            cls=AzMicroMgmtClient._get_response_body_text,
+        )
+        return json.loads(text)
+
+    def list_resources(self, resource_type: str) -> List[dict]:
+        model_iterator = self.resource_client.resources.list(
+            filter=f"resourceType eq '{resource_type}'",
+            expand="properties,etag",
+            cls=AzMicroMgmtClient._enumerate_models,
+        )
+        # Enumerate models
+        return list(model_iterator)

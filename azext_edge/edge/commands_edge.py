@@ -288,7 +288,7 @@ def delete(
 def show_instance(cmd, instance_name: str, resource_group_name: str, show_tree: Optional[bool] = None) -> dict:
     from .providers.orchestration import Instances
 
-    return Instances(cmd).show2(name=instance_name, resource_group_name=resource_group_name, show_tree=show_tree)
+    return Instances(cmd).show(name=instance_name, resource_group_name=resource_group_name, show_tree=show_tree)
 
 
 def list_instances(
@@ -297,4 +297,4 @@ def list_instances(
 ) -> dict:
     from .providers.orchestration import Instances
 
-    return Instances(cmd).list(resource_group_name)
+    return Instances(cmd).list2(resource_group_name)

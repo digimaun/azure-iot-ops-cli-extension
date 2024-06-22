@@ -4,13 +4,15 @@
 # Licensed under the MIT License. See License file in the project root for license information.
 # ----------------------------------------------------------------------------------------------
 
-import logging
 from typing import List, Optional, Union
-from azure.cli.core.azclierror import ResourceNotFoundError
+
+from knack.log import get_logger
 from rich import print
 
-from ...util.az_client import get_resource_client
+from ...util.az_client import AzMicroMgmtClient
 from ...util.queryable import Queryable
+
+logger = get_logger(__name__)
 
 
 def get_instance_query(name: Optional[str] = None, resource_group_name: Optional[str] = None):
@@ -45,44 +47,23 @@ BASE_URL = "https://eastus2euap.management.azure.com"
 class Instances(Queryable):
     def __init__(self, cmd):
         super().__init__(cmd=cmd)
-        self.resource_client = get_resource_client(self.default_subscription_id, base_url=BASE_URL)
-
-        logger = logging.getLogger("azure.mgmt.resource")
-        logger.setLevel(logging.ERROR)
-
-
-    def show2(self, name: str, resource_group_name: str, show_tree: Optional[bool] = None) -> Optional[dict]:
-        result = self.resource_client.resources.get_by_id(
-            resource_id=f"subscriptions/{self.default_subscription_id}/resourceGroups/{resource_group_name}/providers/Private.IoTOperations/instances/{name}",
-            api_version=INSTANCES_API_VERSION,
-        ).as_dict()
-
-        if not result:
-            raise ResourceNotFoundError(
-                f"Unable to find instance '{name}' in resource group '{resource_group_name}' "
-                f"using {self.subscriptions_label}."
-            )
-
-        if show_tree:
-            self._show_tree(result)
-            return
-
-        return result
+        self.micro_client = AzMicroMgmtClient(subscription_id=self.default_subscription_id, base_url=BASE_URL)
 
     def show(self, name: str, resource_group_name: str, show_tree: Optional[bool] = None) -> Optional[dict]:
-        instance_query = get_instance_query(name=name, resource_group_name=resource_group_name)
-        result = self.query(instance_query, resource_group_name=resource_group_name, first=True)
-        if not result:
-            raise ResourceNotFoundError(
-                f"Unable to find instance '{name}' in resource group '{resource_group_name}' "
-                f"using {self.subscriptions_label}."
-            )
+        result = self.micro_client.get_resource_by_id(
+            resource_id=f"subscriptions/{self.default_subscription_id}/resourceGroups/{resource_group_name}"
+            f"/providers/Private.IoTOperations/instances/{name}",
+            api_version=INSTANCES_API_VERSION,
+        )
 
         if show_tree:
             self._show_tree(result)
             return
 
         return result
+
+    def list2(self, resource_group_name: Optional[str] = None) -> List[dict]:
+        return self.micro_client.list_resources("Private.IoTOperations/instances")
 
     def list(self, resource_group_name: Optional[str] = None) -> List[dict]:
         instance_query = get_instance_query(resource_group_name=resource_group_name)
