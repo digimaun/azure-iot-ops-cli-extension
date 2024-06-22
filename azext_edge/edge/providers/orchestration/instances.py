@@ -51,7 +51,7 @@ class Instances(Queryable):
 
     def show(self, name: str, resource_group_name: str, show_tree: Optional[bool] = None) -> Optional[dict]:
         result = self.micro_client.get_resource_by_id(
-            resource_id=f"subscriptions/{self.default_subscription_id}/resourceGroups/{resource_group_name}"
+            resource_id=f"/subscriptions/{self.default_subscription_id}/resourceGroups/{resource_group_name}"
             f"/providers/Private.IoTOperations/instances/{name}",
             api_version=INSTANCES_API_VERSION,
         )
@@ -62,12 +62,12 @@ class Instances(Queryable):
 
         return result
 
-    def list2(self, resource_group_name: Optional[str] = None) -> List[dict]:
-        return self.micro_client.list_resources("Private.IoTOperations/instances")
-
     def list(self, resource_group_name: Optional[str] = None) -> List[dict]:
-        instance_query = get_instance_query(resource_group_name=resource_group_name)
-        return self.query(instance_query, resource_group_name=resource_group_name)
+        return self.micro_client.list_resources(
+            qualified_resource_type="Private.IoTOperations/instances",
+            api_version=INSTANCES_API_VERSION,
+            resource_group_name=resource_group_name,
+        )
 
     def _show_tree(self, instance: dict):
         custom_location = self._get_associated_cl(instance)
@@ -84,7 +84,7 @@ class Instances(Queryable):
 
     def _get_associated_cl(self, instance: dict) -> dict:
         return self.query(
-            QUERIES["get_cl_from_instance"].format(resource_id=instance["extended_location"]["name"]), first=True
+            QUERIES["get_cl_from_instance"].format(resource_id=instance["extendedLocation"]["name"]), first=True
         )
 
 
