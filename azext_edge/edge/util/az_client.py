@@ -6,7 +6,7 @@
 
 import json
 from time import sleep
-from typing import TYPE_CHECKING, List, Tuple, Optional
+from typing import TYPE_CHECKING, List, Tuple, Optional, NamedTuple
 
 from knack.log import get_logger
 
@@ -102,19 +102,23 @@ def get_default_logging_policy() -> HttpLoggingPolicy:
     return http_logging_policy
 
 
+class ResourceIdContainer(NamedTuple):
+    subscription_id: str
+    resource_group_name: str
+    resource_name: str
+
+
 class AzMicroMgmtClient:
     def __init__(self, subscription_id: str, **kwargs):
         self.resource_client = get_resource_client(subscription_id, **kwargs)
 
-    @classmethod
-    def _get_response_body_text(cls, response, _, *args, **kwargs) -> str:
+    def _get_response_body_text(self, response, _, *args, **kwargs) -> str:
         """
         Apply when requiring the raw response body, to avoid set model deserialization.
         """
         return response.http_response.text()
 
-    @classmethod
-    def _enumerate_models(cls, models: list, *args, **kwargs) -> List[dict]:
+    def _enumerate_models(self, models: list, *args, **kwargs) -> List[dict]:
         unpacked = []
         for model in models:
             m = model.as_dict()
@@ -123,11 +127,24 @@ class AzMicroMgmtClient:
 
         return unpacked
 
+    @classmethod
+    def parse_resource_id(self, resource_id: str) -> ResourceIdContainer:
+        parts = resource_id.split("/")
+
+        # Extract the subscription, resource group, and resource name
+        subscription_id = parts[2]
+        resource_group_name = parts[4]
+        resource_name = parts[8]
+
+        return ResourceIdContainer(
+            subscription_id=subscription_id, resource_group_name=resource_group_name, resource_name=resource_name
+        )
+
     def get_resource_by_id(self, resource_id: str, api_version: str) -> dict:
         text = self.resource_client.resources.get_by_id(
             resource_id=resource_id,
             api_version=api_version,
-            cls=AzMicroMgmtClient._get_response_body_text,
+            cls=self._get_response_body_text,
         )
         return json.loads(text)
 
@@ -143,7 +160,7 @@ class AzMicroMgmtClient:
         resources_path = f"{sub_segment}{resource_group_segment}{qualified_resource_type_segment}"
         self.resource_client.resources.list.metadata["url"] = resources_path
         model_iterator = self.resource_client.resources.list(
-            cls=AzMicroMgmtClient._enumerate_models,
+            cls=self._enumerate_models,
             api_version=api_version,
         )
         # Enumerate models

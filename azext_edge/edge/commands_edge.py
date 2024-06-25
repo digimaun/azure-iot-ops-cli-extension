@@ -297,4 +297,4 @@ def list_instances(
 ) -> dict:
     from .providers.orchestration import Instances
 
-    return Instances(cmd).list2(resource_group_name)
+    return Instances(cmd).list(resource_group_name)

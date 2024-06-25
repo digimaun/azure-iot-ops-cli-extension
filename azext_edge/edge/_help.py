@@ -259,6 +259,23 @@ def load_iotops_help():
     """
 
     helps[
+        "iot ops show"
+    ] = """
+        type: command
+        short-summary: Show an IoT Operations instance.
+        long-summary: Optionally the command can output a tree structure of associated resources representing
+          the IoT Operations deployment against the backing cluster.
+
+        examples:
+        - name: Basic usage to show an instance.
+          text: >
+            az iot ops show --name myinstance -g myresourcegroup
+        - name: Output a tree structure of associated resources representing the IoT Operations deployment.
+          text: >
+            az iot ops show --name myinstance -g myresourcegroup --tree
+    """
+
+    helps[
         "iot ops asset"
     ] = """
         type: group

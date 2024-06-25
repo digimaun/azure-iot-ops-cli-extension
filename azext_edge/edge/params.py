@@ -84,7 +84,7 @@ def load_iotops_arguments(self, _):
             "show_tree",
             options_list=["--tree"],
             arg_type=get_three_state_flag(),
-            help="Use to visualize the IoT Operations topology associated with the instance.",
+            help="Use to visualize the IoT Operations deployment against the backing cluster.",
         )
 
 
