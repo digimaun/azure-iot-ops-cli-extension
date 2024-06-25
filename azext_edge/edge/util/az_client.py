@@ -134,7 +134,7 @@ class AzMicroMgmtClient:
         # Extract the subscription, resource group, and resource name
         subscription_id = parts[2]
         resource_group_name = parts[4]
-        resource_name = parts[8]
+        resource_name = parts[-1]
 
         return ResourceIdContainer(
             subscription_id=subscription_id, resource_group_name=resource_group_name, resource_name=resource_name
