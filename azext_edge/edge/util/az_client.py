@@ -6,7 +6,7 @@
 
 import json
 from time import sleep
-from typing import TYPE_CHECKING, List, Tuple, Optional, NamedTuple
+from typing import TYPE_CHECKING, List, NamedTuple, Optional, Tuple
 
 from knack.log import get_logger
 
