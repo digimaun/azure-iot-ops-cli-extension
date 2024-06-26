@@ -122,6 +122,12 @@ class AzMicroMgmtClient:
         unpacked = []
         for model in models:
             m = model.as_dict()
+
+            # TODO - digimaun
+            if "extended_location" in m:
+                m["extendedLocation"] = m["extended_location"]
+                del m["extended_location"]
+
             m.update(model.additional_properties)
             unpacked.append(m)
 

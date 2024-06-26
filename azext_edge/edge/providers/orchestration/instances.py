@@ -27,6 +27,7 @@ QUERIES = {
 INSTANCES_API_VERSION = "2021-10-01-privatepreview"
 # TODO temporary
 BASE_URL = "https://eastus2euap.management.azure.com"
+QUALIFIED_RESOURCE_TYPE = "Private.IoTOperations/instances"
 
 
 class Instances(Queryable):
@@ -37,7 +38,7 @@ class Instances(Queryable):
     def show(self, name: str, resource_group_name: str, show_tree: Optional[bool] = None) -> Optional[dict]:
         result = self.micro_client.get_resource_by_id(
             resource_id=f"/subscriptions/{self.default_subscription_id}/resourceGroups/{resource_group_name}"
-            f"/providers/Private.IoTOperations/instances/{name}",
+            f"/providers/{QUALIFIED_RESOURCE_TYPE}/{name}",
             api_version=INSTANCES_API_VERSION,
         )
 
@@ -49,7 +50,7 @@ class Instances(Queryable):
 
     def list(self, resource_group_name: Optional[str] = None) -> List[dict]:
         return self.micro_client.list_resources(
-            qualified_resource_type="Private.IoTOperations/instances",
+            qualified_resource_type=QUALIFIED_RESOURCE_TYPE,
             api_version=INSTANCES_API_VERSION,
             resource_group_name=resource_group_name,
         )
