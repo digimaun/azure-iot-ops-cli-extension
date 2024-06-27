@@ -108,6 +108,7 @@ class ConnectedCluster:
         query = QUERIES["get_custom_location_for_namespace"].format(resource_id=self.resource_id, namespace=namespace)
 
         result = self.resource_graph.query_resources(query=query)
+        # TODO: Revisit first when AIO supports multiple namespaces.
         return self._process_query_result(result, first=True)
 
     def get_aio_extensions(self) -> Optional[List[dict]]:
