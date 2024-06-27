@@ -22,7 +22,6 @@ from .providers.edge_api import (
     AkriResourceKinds,
     DataProcessorResourceKinds,
     DeviceRegistryResourceKinds,
-    LnmResourceKinds,
     MqResourceKinds,
     OpcuaResourceKinds,
 )
@@ -139,7 +138,7 @@ def load_iotops_arguments(self, _):
         context.argument(
             "ops_service",
             options_list=["--ops-service", "--svc"],
-            choices=CaseInsensitiveList(["akri", "dataprocessor", "deviceregistry", "lnm", "mq", "opcua"]),
+            choices=CaseInsensitiveList(["akri", "dataprocessor", "deviceregistry", "mq", "opcua"]),
             help="The IoT Operations service deployment that will be evaluated.",
         )
         context.argument(
@@ -154,7 +153,6 @@ def load_iotops_arguments(self, _):
                         DataProcessorResourceKinds.INSTANCE.value,
                         DeviceRegistryResourceKinds.ASSET.value,
                         DeviceRegistryResourceKinds.ASSETENDPOINTPROFILE.value,
-                        LnmResourceKinds.LNM.value,
                         MqResourceKinds.BROKER.value,
                         MqResourceKinds.BROKER_LISTENER.value,
                         MqResourceKinds.DIAGNOSTIC_SERVICE.value,

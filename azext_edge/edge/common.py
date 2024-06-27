@@ -140,14 +140,14 @@ class OpsServiceType(ListableEnum):
     """
 
     auto = "auto"
-    billing = "billing"
     mq = "mq"
-    lnm = "lnm"
     opcua = "opcua"
     dataprocessor = "dataprocessor"
     orc = "orc"
     akri = "akri"
     deviceregistry = "deviceregistry"
+    # TODO: re-enable billing once service is available post 0.6.0 release
+    # billing = "billing"
 
 
 class ResourceProviderMapping(ListableEnum):
