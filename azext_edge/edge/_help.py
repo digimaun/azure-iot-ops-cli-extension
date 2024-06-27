@@ -276,6 +276,25 @@ def load_iotops_help():
     """
 
     helps[
+        "iot ops list"
+    ] = """
+        type: command
+        short-summary: List IoT Operations instances.
+        long-summary: Use --query with desired JMESPath syntax to query the result.
+
+        examples:
+        - name: List all instances in the subscription.
+          text: >
+            az iot ops list
+        - name: List all instances of a particular resource group.
+          text: >
+            az iot ops list -g myresourcegroup
+        - name: List the instances in the subscription that have a particular tag value.
+          text: >
+            az iot ops list -g myresourcegroup --query "[?tags.env == 'prod']"
+    """
+
+    helps[
         "iot ops asset"
     ] = """
         type: group
