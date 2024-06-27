@@ -4,8 +4,6 @@
 # Licensed under the MIT License. See License file in the project root for license information.
 # ----------------------------------------------------------------------------------------------
 
-from typing import Dict, List, Optional, Union
-
 
 import pytest
 import responses
@@ -91,7 +89,7 @@ def test_instance_list(mocked_cmd, resource_group_name: str, records: int):
     if resource_group_name:
         expected_list_url += f"/resourceGroups/{resource_group_name}"
     expected_list_url += f"/providers/{QUALIFIED_RESOURCE_TYPE}?api-version={INSTANCES_API_VERSION}"
-    # import pdb; pdb.set_trace()
+
     responses.add(
         method=responses.GET,
         url=expected_list_url,

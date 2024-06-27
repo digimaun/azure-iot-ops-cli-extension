@@ -26,7 +26,6 @@ POLL_RETRIES = 240
 POLL_WAIT_SEC = 15
 
 logger = get_logger(__name__)
-# logger.setLevel(logging.INFO)
 
 
 if TYPE_CHECKING:
@@ -121,12 +120,11 @@ class AzMicroMgmtClient:
     def _enumerate_models(self, models: list, *args, **kwargs) -> List[dict]:
         unpacked = []
         for model in models:
-            m = model.as_dict()
+            m: dict = model.as_dict()
 
             # TODO - digimaun
             if "extended_location" in m:
-                m["extendedLocation"] = m["extended_location"]
-                del m["extended_location"]
+                m["extendedLocation"] = m.pop("extended_location")
 
             m.update(model.additional_properties)
             unpacked.append(m)
