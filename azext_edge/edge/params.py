@@ -342,7 +342,7 @@ def load_iotops_arguments(self, _):
             "custom_location_name",
             options_list=["--custom-location"],
             help="The custom location name corresponding to the IoT Operations deployment. "
-            "The default is in the form '{cluster_name}-{token}-ops-init-cl'.",
+            "The default is in the form '{cluster_name}-{token}-ops-cl'.",
         )
         context.argument(
             "location",

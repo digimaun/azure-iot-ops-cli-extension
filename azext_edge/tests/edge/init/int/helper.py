@@ -153,7 +153,7 @@ def _assert_deployment_resources(resources: List[str], cluster_name: str, resour
 def _assert_instance_show(instance_name: str, resource_group: str, ops_version: str, **arg_dict):
     show_result = run(f"az iot ops show -n {instance_name} -g {resource_group}")
 
-    assert show_result["extendedLocation"]["name"].endswith(arg_dict.get("custom_location", "-ops-init-cl"))
+    assert show_result["extendedLocation"]["name"].endswith(arg_dict.get("custom_location", "-ops-cl"))
     assert show_result["extendedLocation"]["type"] == "CustomLocation"
 
     assert show_result["location"] == arg_dict.get(

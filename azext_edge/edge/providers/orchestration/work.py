@@ -642,10 +642,6 @@ class WorkManager:
         # Covers cluster_namespace
         template.content["variables"]["AIO_CLUSTER_RELEASE_NAMESPACE"] = self._kwargs["cluster_namespace"]
 
-        # TODO @digimaun
-        safe_cluster_name = self._cluster_name.replace("_", "-")
-        template.content["variables"]["OBSERVABILITY"]["targetName"] = f"{safe_cluster_name}-observability"
-
         tls_map = work_kpis.get("tls", {})
         if "aioTrustConfigMap" in tls_map:
             template.content["variables"]["AIO_TRUST_CONFIG_MAP"] = tls_map["aioTrustConfigMap"]

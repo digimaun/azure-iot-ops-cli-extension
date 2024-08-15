@@ -165,14 +165,12 @@ def init(
     # cluster namespace must be lowercase
     cluster_namespace = str(cluster_namespace).lower()
     cluster_name_lowered = cluster_name.lower()
-    # TODO - @digimaun
-    safe_cluster_name = cluster_name_lowered.replace("_", "-")
 
     if not instance_name:
-        instance_name = f"{safe_cluster_name}-ops-instance"
+        instance_name = f"{cluster_name_lowered}-ops-instance"
 
     if not custom_location_name:
-        custom_location_name = f"{cluster_name_lowered}-{url_safe_random_chars(5).lower()}-ops-init-cl"
+        custom_location_name = f"{cluster_name_lowered}-{url_safe_random_chars(4).lower()}-ops-cl"
 
     if tls_ca_path:
         if not tls_ca_key_path:
