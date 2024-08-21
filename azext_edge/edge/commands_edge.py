@@ -151,6 +151,10 @@ def init(
         logger.warning("Nothing to do :)")
         return
 
+    from .providers.orchestration.resources.instances import Instances
+    instances = Instances(cmd)
+    instances.create_ops_baseline(instance_name="blah", cluster_name=cluster_name, resource_group_name=resource_group_name, custom_location_name="blah", extension_ids=None)
+
     load_config_context(context_name=context_name)
 
     # cluster namespace must be lowercase
