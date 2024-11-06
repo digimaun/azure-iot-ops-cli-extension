@@ -31,6 +31,7 @@ from ...util.az_client import (
 from .permissions import ROLE_DEF_FORMAT_STR, PermissionManager, PrincipalType
 from .resource_map import IoTOperationsResourceMap
 from .targets import InitTargets
+from .common import IOT_OPS_EXT_DEPENDENCIES, IOT_OPS_EXTENSION_TYPE
 
 logger = get_logger(__name__)
 
@@ -61,9 +62,7 @@ class WorkRecord:
 
 PROVISIONING_STATE_SUCCESS = "Succeeded"
 CONNECTIVITY_STATUS_CONNECTED = "Connected"
-IOT_OPS_EXTENSION_TYPE = "microsoft.iotoperations"
-IOT_OPS_PLAT_EXTENSION_TYPE = "microsoft.iotoperations.platform"
-SECRET_SYNC_EXTENSION_TYPE = "microsoft.azure.secretstore"
+
 CONTRIBUTOR_ROLE_ID = "b24988ac-6180-42a0-ab88-20f7382dd24c"
 
 
@@ -226,7 +225,6 @@ class WorkManager:
         self._completed_steps: Dict[int, int] = {}
         self._active_step: int = 0
         self._targets = InitTargets(subscription_id=self.subscription_id, **kwargs)
-        self._extension_map = None
         self._resource_map = IoTOperationsResourceMap(
             cmd=self.cmd,
             cluster_name=self._targets.cluster_name,
@@ -318,10 +316,6 @@ class WorkManager:
                 )
                 self.render_display(category=WorkCategoryKey.ENABLE_IOT_OPS)
                 _ = wait_for_terminal_state(enablement_poller)
-
-                self._extension_map = self._resource_map.connected_cluster.get_extensions_by_type(
-                    IOT_OPS_PLAT_EXTENSION_TYPE, SECRET_SYNC_EXTENSION_TYPE
-                )
 
                 self.complete_step(
                     category=WorkCategoryKey.ENABLE_IOT_OPS, completed_step=WorkStepKey.DEPLOY_ENABLEMENT
@@ -541,3 +535,57 @@ class WorkManager:
                 self._progress_bar.update(self._task_id, description="Done.")
                 sleep(0.5)
             self._live.stop()
+
+
+    @property
+    def extension_dependencies(self) -> dict[str, Optional[dict]]:
+        return self._resource_map.connected_cluster.get_extensions_by_type(
+            *IOT_OPS_EXT_DEPENDENCIES
+        )
+
+    @property
+    def extension(self) -> Optional[dict]:
+        return self._resource_map.connected_cluster.get_extensions_by_type(
+            IOT_OPS_EXTENSION_TYPE
+        )
+
+    def ensure_extension_dependencies(self):
+        # TODO - add non-success provisioningState
+        missing_exts = []
+        for ext in self.extension_dependencies:
+            if not self.extension_dependencies[ext]:
+                missing_exts.append(ext)
+        if missing_exts:
+            raise ValidationError(
+                f"""
+                The following foundational service(s) were not detected on the cluster:
+
+                {'\n'.join(missing_exts)}
+
+                Run init to install dependencies.
+                """
+            )
+
+
+    def apply_sr_role_assignment(self, ops_ext_principal_id: str, sr_id: str):
+        self._extension_map = self._resource_map.connected_cluster.get_extensions_by_type(
+            IOT_OPS_EXTENSION_TYPE
+        )
+
+        try:
+            schema_registry_id_parts = parse_resource_id(self._targets.schema_registry_resource_id)
+            self.permission_manager.apply_role_assignment(
+                scope=self._targets.schema_registry_resource_id,
+                principal_id=extension_principal_id,
+                role_def_id=ROLE_DEF_FORMAT_STR.format(
+                    subscription_id=schema_registry_id_parts.subscription_id,
+                    role_id=CONTRIBUTOR_ROLE_ID,
+                ),
+                principal_type=PrincipalType.SERVICE_PRINCIPAL.value,
+            )
+        except Exception as e:
+            role_assignment_error = get_user_msg_warn_ra(
+                prefix=f"Role assignment failed with:\n{str(e)}.",
+                principal_id=extension_principal_id,
+                scope=self._targets.schema_registry_resource_id,
+            )

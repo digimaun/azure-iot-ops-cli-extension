@@ -33,6 +33,18 @@ TRUST_ISSUER_KIND_KEY = "issuerKind"
 TRUST_SETTING_KEYS = frozenset(["issuerName", TRUST_ISSUER_KIND_KEY, "configMapName", "configMapKey"])
 
 
+IOT_OPS_PLAT_EXTENSION_TYPE = "microsoft.iotoperations.platform"
+OSM_EXTENSION_TYPE = "microsoft.openservicemesh"
+ACS_EXTENSION_TYPE = "microsoft.arc.containerstorage"
+SECRET_SYNC_EXTENSION_TYPE = "microsoft.azure.secretstore"
+
+IOT_OPS_EXTENSION_TYPE = "microsoft.iotoperations"
+
+IOT_OPS_EXT_DEPENDENCIES = frozenset(
+    [IOT_OPS_PLAT_EXTENSION_TYPE, OSM_EXTENSION_TYPE, ACS_EXTENSION_TYPE, SECRET_SYNC_EXTENSION_TYPE]
+)
+
+
 class MqMode(Enum):
     auto = "auto"
     distributed = "distributed"
@@ -63,25 +75,22 @@ class IdentityUsageType(Enum):
 
 class SchemaType(Enum):
     """value is user friendly, full_value is the service friendly"""
+
     message = "message"
 
     @property
     def full_value(self) -> str:
-        type_map = {
-            SchemaType.message: "MessageSchema"
-        }
+        type_map = {SchemaType.message: "MessageSchema"}
         return type_map[self]
 
 
 class SchemaFormat(Enum):
     """value is user friendly, full_value is the service friendly"""
+
     json = "json"
     delta = "delta"
 
     @property
     def full_value(self) -> str:
-        format_map = {
-            SchemaFormat.json: "JsonSchema/draft-07",
-            SchemaFormat.delta: "Delta/1.0"
-        }
+        format_map = {SchemaFormat.json: "JsonSchema/draft-07", SchemaFormat.delta: "Delta/1.0"}
         return format_map[self]
