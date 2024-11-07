@@ -317,7 +317,7 @@ class WorkManager:
 
         try:
             # Ensure connection to ARM if needed. Show remediation error message otherwise.
-            self.render_display()
+            self._render_display()
             verify_cli_client_connections()
             self._process_connected_cluster()
 
@@ -325,9 +325,9 @@ class WorkManager:
             if self._pre_flight:
 
                 # WorkStepKey.REG_RP
-                self.render_display(category=WorkCategoryKey.PRE_FLIGHT, active_step=WorkStepKey.REG_RP)
+                self._render_display(category=WorkCategoryKey.PRE_FLIGHT, active_step=WorkStepKey.REG_RP)
                 register_providers(self.subscription_id)
-                self.complete_step(
+                self._complete_step(
                     category=WorkCategoryKey.PRE_FLIGHT,
                     completed_step=WorkStepKey.REG_RP,
                     active_step=WorkStepKey.ENUMERATE_PRE_FLIGHT,
@@ -347,7 +347,7 @@ class WorkManager:
                     verify_write_permission_against_rg(
                         subscription_id=self.subscription_id, resource_group_name=self._targets.resource_group_name
                     )
-                self.complete_step(
+                self._complete_step(
                     category=WorkCategoryKey.PRE_FLIGHT,
                     completed_step=WorkStepKey.ENUMERATE_PRE_FLIGHT,
                 )
@@ -355,7 +355,7 @@ class WorkManager:
             # Enable IoT Ops workflow
             if self._apply_foundation:
                 enablement_work_name = self._work_format_str.format(op="enablement")
-                self.render_display(
+                self._render_display(
                     category=WorkCategoryKey.ENABLE_IOT_OPS, active_step=WorkStepKey.WHAT_IF_ENABLEMENT
                 )
                 enablement_content, enablement_parameters = self._targets.get_ops_enablement_template()
@@ -365,7 +365,7 @@ class WorkManager:
                     deployment_name=enablement_work_name,
                     what_if=True,
                 )
-                self.complete_step(
+                self._complete_step(
                     category=WorkCategoryKey.ENABLE_IOT_OPS,
                     completed_step=WorkStepKey.WHAT_IF_ENABLEMENT,
                     active_step=WorkStepKey.DEPLOY_ENABLEMENT,
@@ -385,10 +385,10 @@ class WorkManager:
                     f"[link={enablement_deploy_link}]"
                     f"{self._display.categories[WorkCategoryKey.ENABLE_IOT_OPS][0].title}[/link]"
                 )
-                self.render_display(category=WorkCategoryKey.ENABLE_IOT_OPS)
+                self._render_display(category=WorkCategoryKey.ENABLE_IOT_OPS)
                 _ = wait_for_terminal_state(enablement_poller)
 
-                self.complete_step(
+                self._complete_step(
                     category=WorkCategoryKey.ENABLE_IOT_OPS, completed_step=WorkStepKey.DEPLOY_ENABLEMENT
                 )
 
@@ -402,7 +402,7 @@ class WorkManager:
                 self._process_extension_dependencies()
 
                 instance_work_name = self._work_format_str.format(op="instance")
-                self.render_display(category=WorkCategoryKey.DEPLOY_IOT_OPS, active_step=WorkStepKey.WHAT_IF_INSTANCE)
+                self._render_display(category=WorkCategoryKey.DEPLOY_IOT_OPS, active_step=WorkStepKey.WHAT_IF_INSTANCE)
                 instance_content, instance_parameters = self._targets.get_ops_instance_template(
                     cl_extension_ids=[
                         self.extension_dependencies[ext]["id"]
@@ -415,7 +415,7 @@ class WorkManager:
                     deployment_name=instance_work_name,
                     what_if=True,
                 )
-                self.complete_step(
+                self._complete_step(
                     category=WorkCategoryKey.DEPLOY_IOT_OPS,
                     completed_step=WorkStepKey.WHAT_IF_INSTANCE,
                     active_step=WorkStepKey.DEPLOY_INSTANCE,
@@ -435,31 +435,31 @@ class WorkManager:
                     f"[link={instance_deploy_link}]"
                     f"{self._display.categories[WorkCategoryKey.DEPLOY_IOT_OPS][0].title}[/link]"
                 )
-                self.render_display(category=WorkCategoryKey.DEPLOY_IOT_OPS)
+                self._render_display(category=WorkCategoryKey.DEPLOY_IOT_OPS)
                 _ = wait_for_terminal_state(instance_poller)
                 self._apply_sr_role_assignment()
 
-                self.complete_step(
+                self._complete_step(
                     category=WorkCategoryKey.DEPLOY_IOT_OPS,
                     completed_step=WorkStepKey.DEPLOY_INSTANCE,
                 )
 
-            return self.get_user_result()
+            return self._get_user_result()
         except HttpResponseError as e:
             # TODO: repeated error messages.
             raise AzureResponseError(e.message)
         except KeyboardInterrupt:
             return
         finally:
-            self.stop_display()
+            self._stop_display()
 
-    def complete_step(
+    def _complete_step(
         self, category: WorkCategoryKey, completed_step: WorkStepKey, active_step: Optional[WorkStepKey] = None
     ):
         self._completed_steps[completed_step] = 1
-        self.render_display(category, active_step=active_step)
+        self._render_display(category, active_step=active_step)
 
-    def render_display(self, category: Optional[WorkCategoryKey] = None, active_step: Optional[WorkStepKey] = None):
+    def _render_display(self, category: Optional[WorkCategoryKey] = None, active_step: Optional[WorkStepKey] = None):
         if active_step:
             self._active_step = active_step
 
@@ -536,7 +536,7 @@ class WorkManager:
         if self._show_progress and not self._live.is_started:
             self._live.start(True)
 
-    def stop_display(self):
+    def _stop_display(self):
         if self._show_progress and self._live.is_started:
             if self._progress_shown:
                 self._progress_bar.update(self._task_id, description="Done.")
@@ -559,11 +559,11 @@ class WorkManager:
             ]
         return self._ops_ext
 
-    def get_user_result(self) -> Optional[dict]:
+    def _get_user_result(self) -> Optional[dict]:
         if self._show_progress:
             self._resource_map.refresh_resource_state()
             resource_tree = self._resource_map.build_tree()
-            self.stop_display()
+            self._stop_display()
             print(resource_tree)
 
         if self._warnings:
@@ -573,3 +573,7 @@ class WorkManager:
         # TODO @digimaun - work kpis
         if self._result_payload:
             return self._result_payload
+
+    def _update_payload(self, **kwargs: dict):
+        if not self._show_progress:
+            self._result_payload.update(**kwargs)
