@@ -71,7 +71,12 @@ def upgrade_ops_resources(
     )
 
     with Progress(
-        SpinnerColumn("star"), *Progress.get_default_columns(), "Elapsed:", TimeElapsedColumn(), transient=True
+        SpinnerColumn("star"),
+        *Progress.get_default_columns(),
+        "Elapsed:",
+        TimeElapsedColumn(),
+        transient=True,
+        disable=not bool(no_progress),
     ) as progress:
         _ = progress.add_task("Analyzing cluster...", total=None)
         upgradable_extensions = upgrade_manager.analyze_cluster(
@@ -110,6 +115,7 @@ class UpgradeManager:
         self.cmd = cmd
         self.instance_name = instance_name
         self.resource_group_name = resource_group_name
+        self.no_progress = no_progress
         self.instances = Instances(self.cmd)
         self.resource_map = self.instances.get_resource_map(
             self.instances.show(name=self.instance_name, resource_group_name=self.resource_group_name)
@@ -131,23 +137,28 @@ class UpgradeManager:
         return upgradable_extensions
 
     def apply_upgrades(
-        self, upgradable_extensions: List["ExtensionUpgradeState"], confirm_yes: Optional[bool] = None
+        self,
+        upgradable_extensions: List["ExtensionUpgradeState"],
+        confirm_yes: Optional[bool] = None,
     ) -> Optional[List[dict]]:
 
-        table = get_default_table()
-        for ext in upgradable_extensions:
-            table.add_row(
-                f"{ext.moniker}",
-                f"{ext.current_version[0]} {{{ext.current_version[1]}}}",
-                JSON(dumps(ext.get_patch())),
-            )
-            table.add_section()
+        if not self.no_progress:
+            table = get_default_table()
+            for ext in upgradable_extensions:
+                table.add_row(
+                    f"{ext.moniker}",
+                    f"{ext.current_version[0]} {{{ext.current_version[1]}}}",
+                    JSON(dumps(ext.get_patch())),
+                )
+                table.add_section()
 
-        DEFAULT_CONSOLE.print(table)
+            DEFAULT_CONSOLE.print(table)
+
         should_bail = not should_continue_prompt(confirm_yes=confirm_yes, context="Upgrade")
         if should_bail:
             return
 
+        # TODO - @digimaun
         return_payload = []
         for ext in upgradable_extensions:
             print(f"Start {ext.moniker}")
