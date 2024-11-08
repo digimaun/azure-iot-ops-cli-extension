@@ -4,25 +4,21 @@
 # Licensed under the MIT License. See License file in the project root for license information.
 # ----------------------------------------------------------------------------------------------
 
-from time import sleep
+from json import dumps
 from typing import Dict, List, Optional, Tuple
 
 from azure.cli.core.azclierror import (
     ValidationError,
 )
-from azure.core.exceptions import HttpResponseError
 from knack.log import get_logger
 from packaging import version
-from rich import print
-from rich.console import NewLine
-from rich.live import Live
-from rich.padding import Padding
+from rich.console import Console
+from rich.json import JSON
 from rich.progress import Progress, SpinnerColumn, TimeElapsedColumn
-from rich.table import Table
+from rich.table import Table, box
 
 from ...util import assemble_nargs_to_dict
 from ...util.common import should_continue_prompt
-from .resource_map import IoTOperationsResourceMap
 from .resources import Instances
 from .template import M3_ENABLEMENT_TEMPLATE, M3_INSTANCE_TEMPLATE
 
@@ -39,6 +35,9 @@ OPS_EXTENSION_TYPES_MAP = {
 
 INSTANCE_TEMPLATE = M3_INSTANCE_TEMPLATE.copy()
 ENABLEMENT_TEMPLATE = M3_ENABLEMENT_TEMPLATE.copy()
+MAX_DISPLAY_WIDTH = 100
+
+DEFAULT_CONSOLE = Console(width=MAX_DISPLAY_WIDTH)
 
 
 def upgrade_ops_resources(
@@ -97,7 +96,7 @@ def upgrade_ops_resources(
         logger.warning("Nothing to upgrade :)")
         return
 
-    upgrade_manager.apply_upgrades(upgradable_extensions, confirm_yes)
+    return upgrade_manager.apply_upgrades(upgradable_extensions, confirm_yes)
 
 
 class UpgradeManager:
@@ -131,18 +130,25 @@ class UpgradeManager:
                 upgradable_extensions.append(ext)
         return upgradable_extensions
 
-    def apply_upgrades(self, upgradable_extensions: List["ExtensionUpgradeState"], confirm_yes: Optional[bool] = None):
-        # dry run
-        for ext in upgradable_extensions:
-            print(
-                f"Update extension '{ext.moniker}' version '{ext.current_version[0]} {ext.current_version[1]}' with patch: {ext.get_patch()}"
-            )
-            print()
+    def apply_upgrades(
+        self, upgradable_extensions: List["ExtensionUpgradeState"], confirm_yes: Optional[bool] = None
+    ) -> Optional[List[dict]]:
 
+        table = get_default_table()
+        for ext in upgradable_extensions:
+            table.add_row(
+                f"{ext.moniker}",
+                f"{ext.current_version[0]} {{{ext.current_version[1]}}}",
+                JSON(dumps(ext.get_patch())),
+            )
+            table.add_section()
+
+        DEFAULT_CONSOLE.print(table)
         should_bail = not should_continue_prompt(confirm_yes=confirm_yes, context="Upgrade")
         if should_bail:
             return
 
+        return_payload = []
         for ext in upgradable_extensions:
             print(f"Start {ext.moniker}")
             updated = self.resource_map.connected_cluster.clusters.extensions.update_cluster_extension(
@@ -152,6 +158,9 @@ class UpgradeManager:
                 update_payload=ext.get_patch(),
             )
             print(f"Finish {ext.moniker}")
+            return_payload.append(updated)
+
+        return return_payload
 
 
 def build_override_map(**override_kwargs) -> Dict[str, "ConfigOverride"]:
@@ -181,7 +190,7 @@ class ConfigOverride:
         version: Optional[str] = None,
         train: Optional[str] = None,
     ):
-        self.config = assemble_nargs_to_dict(config)
+        self.config = assemble_nargs_to_dict(config, True)
         self.version = version
         self.train = train
 
@@ -251,3 +260,14 @@ class ExtensionUpgradeState:
                 payload["properties"]["version"] = self.override.version
 
         return payload
+
+
+def get_default_table() -> Table:
+    table = Table(
+        box=box.ROUNDED, highlight=True, expand=False, min_width=MAX_DISPLAY_WIDTH, title="The Upgrade Story"
+    )
+    table.add_column("Extension")
+    table.add_column("Version {Train}")
+    table.add_column("Patch Payload")
+
+    return table
