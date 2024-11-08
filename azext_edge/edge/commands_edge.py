@@ -130,16 +130,67 @@ def upgrade(
     instance_name: str,
     no_progress: Optional[bool] = None,
     confirm_yes: Optional[bool] = None,
-    **kwargs
+    **kwargs,
 ):
     from .providers.orchestration.upgrade import upgrade_ops_resources
+
     return upgrade_ops_resources(
         cmd=cmd,
         resource_group_name=resource_group_name,
         instance_name=instance_name,
         no_progress=no_progress,
         confirm_yes=confirm_yes,
-        **kwargs
+        **kwargs,
+    )
+
+
+def upgrade2(
+    cmd,
+    resource_group_name: str,
+    instance_name: str,
+    no_progress: Optional[bool] = None,
+    confirm_yes: Optional[bool] = None,
+    ops_config: Optional[List[str]] = None,
+    ops_version: Optional[str] = None,
+    ops_train: Optional[str] = None,
+    acs_config: Optional[List[str]] = None,
+    acs_version: Optional[str] = None,
+    acs_train: Optional[str] = None,
+    osm_config: Optional[List[str]] = None,
+    osm_version: Optional[str] = None,
+    osm_train: Optional[str] = None,
+    ssc_config: Optional[List[str]] = None,
+    ssc_version: Optional[str] = None,
+    ssc_train: Optional[str] = None,
+    plt_config: Optional[List[str]] = None,
+    plt_version: Optional[str] = None,
+    plt_train: Optional[str] = None,
+    **kwargs,
+):
+    from .providers.orchestration.upgrade2 import upgrade_ops_resources
+
+    return upgrade_ops_resources(
+        cmd=cmd,
+        resource_group_name=resource_group_name,
+        instance_name=instance_name,
+        no_progress=no_progress,
+        confirm_yes=confirm_yes,
+        ops_config=ops_config,
+        ops_version=ops_version,
+        ops_train=ops_train,
+        acs_config=acs_config,
+        acs_version=acs_version,
+        acs_train=acs_train,
+        osm_config=osm_config,
+        osm_version=osm_version,
+        osm_train=osm_train,
+        ssc_config=ssc_config,
+        ssc_version=ssc_version,
+        ssc_train=ssc_train,
+        plt_config=plt_config,
+        plt_version=plt_version,
+        plt_train=plt_train,
+        **kwargs,
     )
 
 

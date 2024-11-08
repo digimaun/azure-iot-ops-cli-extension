@@ -504,6 +504,30 @@ def load_iotops_arguments(self, _):
             "resource Id is no longer found within IoT Operations.",
         )
 
+    with self.argument_context("iot ops upgrade2") as context:
+        for ext in ["ops", "acs", "osm", "ssc", "plt"]:
+            context.argument(
+                f"{ext}_config",
+                options_list=[f"--{ext}-config"],
+                nargs="+",
+                action="extend",
+                help=f"{ext} arc extension custom configuration. Format is space-separated key=value pairs. "
+                f"--{ext}-config can be used one or more times. For advanced use cases.",
+                arg_group="Extension Config",
+            )
+            context.argument(
+                f"{ext}_version",
+                options_list=[f"--{ext}-version"],
+                help=f"Use to override the built-in {ext} arc extension version. ",
+                arg_group="Extension Config",
+            )
+            context.argument(
+                f"{ext}_train",
+                options_list=[f"--{ext}-train"],
+                help=f"Use to override the built-in {ext} arc extension release train. ",
+                arg_group="Extension Config",
+            )
+
     with self.argument_context("iot ops delete") as context:
         context.argument(
             "include_dependencies",
