@@ -5,43 +5,60 @@
 # ----------------------------------------------------------------------------------------------
 
 
-# import json
-# import string
-# from os import environ
-# from pathlib import Path
-# from random import randint
-# from typing import Dict, FrozenSet, List
-# from unittest.mock import Mock
+import json
+from os import environ
+from pathlib import Path
+from random import randint
+from typing import Dict, FrozenSet, List
+from unittest.mock import Mock
 
-# import pytest
+import pytest
 
-# from azext_edge.edge.commands_edge import init
-# from azext_edge.edge.common import INIT_NO_PREFLIGHT_ENV_KEY
-# from azext_edge.edge.providers.base import DEFAULT_NAMESPACE
-# from azext_edge.edge.providers.orchestration.common import (
-#     KubernetesDistroType,
-#     MqMemoryProfile,
-#     MqServiceType,
-# )
-# from azext_edge.edge.providers.orchestration.work import (
-#     CURRENT_TEMPLATE,
-#     WorkCategoryKey,
-#     WorkManager,
-#     WorkStepKey,
-#     get_basic_dataflow_profile,
-# )
+from azext_edge.edge.common import INIT_NO_PREFLIGHT_ENV_KEY
+from azext_edge.edge.providers.base import DEFAULT_NAMESPACE
+from azext_edge.edge.providers.orchestration.common import (
+    KubernetesDistroType,
+    MqMemoryProfile,
+    MqServiceType,
+)
+from azext_edge.edge.providers.orchestration.work import (
+    CURRENT_TEMPLATE,
+    WorkCategoryKey,
+    WorkManager,
+    WorkStepKey,
+)
 
-# from ...generators import generate_random_string
-
-# MOCK_BROKER_CONFIG_PATH = Path(__file__).parent.joinpath("./broker_config.json")
+from ...generators import generate_random_string
 
 
-# @pytest.fixture(scope="module")
-# def mock_broker_config():
-#     custom_config = {generate_random_string(): generate_random_string()}
-#     MOCK_BROKER_CONFIG_PATH.write_text(json.dumps(custom_config), encoding="utf-8")
-#     yield custom_config
-#     MOCK_BROKER_CONFIG_PATH.unlink()
+def build_target_scenario(cluster_name: str, resource_group_name: str, **kwargs):
+    return {
+        "cluster_name": cluster_name,
+        "resource_group_name": resource_group_name,
+        **kwargs,
+    }
+
+
+@pytest.mark.parametrize(
+    "target_scenario",
+    [
+        build_target_scenario(cluster_name=generate_random_string(), resource_group_name=generate_random_string()),
+    ],
+)
+def test_iot_ops_init(mocked_cmd: Mock, target_scenario: dict):
+    from azext_edge.edge.commands_edge import init
+
+    init_call_kwargs = {
+        "cmd": mocked_cmd,
+        "cluster_name": target_scenario["cluster_name"],
+        "resource_group_name": target_scenario["resource_group_name"],
+        "enable_fault_tolerance": target_scenario.get("enable_fault_tolerance"),
+        "no_progress": True,
+        "ensure_latest": target_scenario.get("ensure_latest"),
+        "wait_sec": 0.1,
+    }
+
+    init_result = init(**init_call_kwargs)
 
 
 # @pytest.mark.parametrize(
@@ -230,17 +247,17 @@
 #         assert mocked_deploy_template.call_args.kwargs["cluster_namespace"] == expected_cluster_namespace
 #     else:
 #         pass
-#         # if not nothing_to_do and result:
-#         #     assert "deploymentName" not in result
-#         #     assert "resourceGroup" not in result
-#         #     assert "clusterName" not in result
-#         #     assert "clusterNamespace" not in result
-#         #     assert "deploymentLink" not in result
-#         #     assert "deploymentState" not in result
-#         # TODO
-#         # mocked_deploy_template.assert_not_called()
+# if not nothing_to_do and result:
+#     assert "deploymentName" not in result
+#     assert "resourceGroup" not in result
+#     assert "clusterName" not in result
+#     assert "clusterNamespace" not in result
+#     assert "deploymentLink" not in result
+#     assert "deploymentState" not in result
+# TODO
+# mocked_deploy_template.assert_not_called()
 
-#     # assert spy_get_current_template_copy.call_count == expected_template_copies
+# assert spy_get_current_template_copy.call_count == expected_template_copies
 
 
 # def _assert_displays_for(work_category_set: FrozenSet[WorkCategoryKey], display_spys: Dict[str, Mock]):
