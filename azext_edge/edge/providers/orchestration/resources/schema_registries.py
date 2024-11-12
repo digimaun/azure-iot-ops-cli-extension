@@ -142,7 +142,7 @@ class SchemaRegistries(Queryable):
                 c.stop()
                 logger.warning(
                     get_user_msg_warn_ra(
-                        prefix=f"Role assignment failed with:\n{str(e)}.",
+                        prefix=f"Role assignment failed with:\n{str(e)}",
                         principal_id=result["identity"]["principalId"],
                         scope=blob_container["id"],
                     )

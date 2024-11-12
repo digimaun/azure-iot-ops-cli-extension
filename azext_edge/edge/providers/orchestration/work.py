@@ -242,7 +242,7 @@ class WorkManager:
         except Exception as e:
             self._warnings.append(
                 get_user_msg_warn_ra(
-                    prefix=f"Role assignment failed with:\n{str(e)}.",
+                    prefix=f"Role assignment failed with:\n{str(e)}",
                     principal_id=ops_ext_principal_id,
                     scope=self._targets.schema_registry_resource_id,
                 )
