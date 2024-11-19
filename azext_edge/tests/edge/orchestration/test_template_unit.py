@@ -9,8 +9,8 @@ from unittest import TestCase
 import pytest
 
 from azext_edge.edge.providers.orchestration.template import (
-    BLUEPRINT_TEMPLATE_ENABLEMENT,
-    BLUEPRINT_TEMPLATE_INSTANCE,
+    TEMPLATE_BLUEPRINT_ENABLEMENT,
+    TEMPLATE_BLUEPRINT_INSTANCE,
     TemplateBlueprint,
     get_insecure_listener,
 )
@@ -57,31 +57,31 @@ EXPECTED_SHARED_DEFINITION_KEYS = frozenset(
 
 
 def test_enablement_template():
-    assert BLUEPRINT_TEMPLATE_ENABLEMENT.commit_id
-    assert BLUEPRINT_TEMPLATE_ENABLEMENT.content
+    assert TEMPLATE_BLUEPRINT_ENABLEMENT.commit_id
+    assert TEMPLATE_BLUEPRINT_ENABLEMENT.content
 
     for resource in EXPECTED_EXTENSION_RESOURCE_KEYS:
-        assert BLUEPRINT_TEMPLATE_ENABLEMENT.get_resource_by_key(resource)
+        assert TEMPLATE_BLUEPRINT_ENABLEMENT.get_resource_by_key(resource)
 
     for definition in EXPECTED_SHARED_DEFINITION_KEYS:
-        assert BLUEPRINT_TEMPLATE_ENABLEMENT.get_type_definition(definition)
+        assert TEMPLATE_BLUEPRINT_ENABLEMENT.get_type_definition(definition)
 
 
 def test_instance_template():
-    assert BLUEPRINT_TEMPLATE_INSTANCE.commit_id
-    assert BLUEPRINT_TEMPLATE_INSTANCE.content
+    assert TEMPLATE_BLUEPRINT_INSTANCE.commit_id
+    assert TEMPLATE_BLUEPRINT_INSTANCE.content
 
     for resource in EXPECTED_INSTANCE_RESOURCE_KEYS:
-        assert BLUEPRINT_TEMPLATE_INSTANCE.get_resource_by_key(resource)
+        assert TEMPLATE_BLUEPRINT_INSTANCE.get_resource_by_key(resource)
 
     for definition in EXPECTED_SHARED_DEFINITION_KEYS:
-        assert BLUEPRINT_TEMPLATE_INSTANCE.get_type_definition(definition)
+        assert TEMPLATE_BLUEPRINT_INSTANCE.get_type_definition(definition)
 
-    instance = BLUEPRINT_TEMPLATE_INSTANCE.get_resource_by_type("Microsoft.IoTOperations/instances")
+    instance = TEMPLATE_BLUEPRINT_INSTANCE.get_resource_by_type("Microsoft.IoTOperations/instances")
     assert instance and isinstance(instance, dict)
 
     # Copy test in other area
-    blueprint_template_copy = BLUEPRINT_TEMPLATE_INSTANCE.copy()
+    blueprint_template_copy = TEMPLATE_BLUEPRINT_INSTANCE.copy()
 
     instance_name = generate_random_string()
     broker_name = generate_random_string()

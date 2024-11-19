@@ -28,10 +28,10 @@ from ...util.az_client import (
     wait_for_terminal_state,
 )
 from .common import (
-    IOT_OPS_EXT_DEPENDENCIES,
-    IOT_OPS_EXTENSION_TYPE,
-    IOT_OPS_PLAT_EXTENSION_TYPE,
-    SECRET_SYNC_EXTENSION_TYPE,
+    EXTENSION_TYPE_OPS,
+    EXTENSION_TYPE_PLATFORM,
+    EXTENSION_TYPE_SSC,
+    OPS_EXTENSION_DEPS,
 )
 from .permissions import ROLE_DEF_FORMAT_STR, PermissionManager, PrincipalType
 from .resource_map import IoTOperationsResourceMap
@@ -190,7 +190,7 @@ class WorkManager:
     def _process_extension_dependencies(self):
         # TODO - add non-success provisioningState
         missing_exts = []
-        dependencies = self.extension_dependencies
+        dependencies = self.ops_extension_dependencies
         for ext in dependencies:
             if not dependencies.get(ext):
                 missing_exts.append(ext)
@@ -202,7 +202,7 @@ class WorkManager:
             )
 
         # validate trust config in platform extension matches trust settings in create
-        platform_extension_config = dependencies[IOT_OPS_PLAT_EXTENSION_TYPE]["properties"]["configurationSettings"]
+        platform_extension_config = dependencies[EXTENSION_TYPE_PLATFORM]["properties"]["configurationSettings"]
         is_user_trust = platform_extension_config.get("installCertManager", "").lower() != "true"
         if is_user_trust and not self._targets.trust_settings:
             raise ValidationError(
@@ -216,7 +216,7 @@ class WorkManager:
             )
 
     def _apply_sr_role_assignment(self) -> Optional[str]:
-        ops_ext = self.extension
+        ops_ext = self.ops_extension
         if not ops_ext:
             raise ValidationError("IoT Operations extension not detected. Please run 'az iot ops create'.")
         # TODO - add non-success provisioningState
@@ -405,8 +405,8 @@ class WorkManager:
                 self._render_display(category=WorkCategoryKey.DEPLOY_IOT_OPS, active_step=WorkStepKey.WHAT_IF_INSTANCE)
                 instance_content, instance_parameters = self._targets.get_ops_instance_template(
                     cl_extension_ids=[
-                        self.extension_dependencies[ext]["id"]
-                        for ext in [IOT_OPS_PLAT_EXTENSION_TYPE, SECRET_SYNC_EXTENSION_TYPE]
+                        self.ops_extension_dependencies[ext]["id"]
+                        for ext in [EXTENSION_TYPE_PLATFORM, EXTENSION_TYPE_SSC]
                     ],
                 )
                 self._deploy_template(
@@ -544,18 +544,18 @@ class WorkManager:
             self._live.stop()
 
     @property
-    def extension_dependencies(self) -> Dict[str, Optional[dict]]:
+    def ops_extension_dependencies(self) -> Dict[str, Optional[dict]]:
         if not self._ops_ext_dependencies:
             self._ops_ext_dependencies = self._resource_map.connected_cluster.get_extensions_by_type(
-                *IOT_OPS_EXT_DEPENDENCIES
+                *OPS_EXTENSION_DEPS
             )
         return self._ops_ext_dependencies
 
     @property
-    def extension(self) -> Optional[dict]:
+    def ops_extension(self) -> Optional[dict]:
         if not self._ops_ext:
-            self._ops_ext = self._resource_map.connected_cluster.get_extensions_by_type(IOT_OPS_EXTENSION_TYPE)[
-                IOT_OPS_EXTENSION_TYPE
+            self._ops_ext = self._resource_map.connected_cluster.get_extensions_by_type(EXTENSION_TYPE_OPS)[
+                EXTENSION_TYPE_OPS
             ]
         return self._ops_ext
 

@@ -16,7 +16,7 @@ from rich.live import Live
 from rich.progress import Progress, SpinnerColumn, TimeElapsedColumn
 from rich.table import Table
 
-from azext_edge.edge.providers.orchestration.work import IOT_OPS_EXTENSION_TYPE
+from azext_edge.edge.providers.orchestration.work import EXTENSION_TYPE_OPS
 
 from ...util.az_client import get_resource_client, wait_for_terminal_states
 from ...util.common import should_continue_prompt
@@ -146,8 +146,8 @@ class DeletionManager:
         else:
             # instance delete should delete AIO extension too
             # TODO: @c-ryan-k hacky
-            aio_ext_obj = self.resource_map.connected_cluster.get_extensions_by_type(IOT_OPS_EXTENSION_TYPE).get(
-                IOT_OPS_EXTENSION_TYPE, {}
+            aio_ext_obj = self.resource_map.connected_cluster.get_extensions_by_type(EXTENSION_TYPE_OPS).get(
+                EXTENSION_TYPE_OPS, {}
             )
             if aio_ext_obj:
                 aio_ext_id: str = aio_ext_obj.get("id", "")

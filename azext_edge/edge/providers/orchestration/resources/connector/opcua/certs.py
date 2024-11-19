@@ -17,7 +17,7 @@ import yaml
 
 from ....common import CUSTOM_LOCATIONS_API_VERSION
 from ...instances import SECRET_SYNC_RESOURCE_TYPE, SPC_RESOURCE_TYPE, Instances
-from ....work import IOT_OPS_EXTENSION_TYPE
+from ....work import EXTENSION_TYPE_OPS
 from ......util.file_operations import read_file_content, validate_file_extension
 from ......util.queryable import Queryable
 from ......util.az_client import (
@@ -691,8 +691,8 @@ class OpcUACerts(Queryable):
         application_uri: str,
     ):
         # get the opcua extension
-        extensions = self.resource_map.connected_cluster.get_extensions_by_type(IOT_OPS_EXTENSION_TYPE)
-        aio_extension = extensions.get(IOT_OPS_EXTENSION_TYPE)
+        extensions = self.resource_map.connected_cluster.get_extensions_by_type(EXTENSION_TYPE_OPS)
+        aio_extension = extensions.get(EXTENSION_TYPE_OPS)
         if not aio_extension:
             raise ResourceNotFoundError("IoT Operations extension not found.")
 

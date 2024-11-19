@@ -32,17 +32,13 @@ AIO_INSECURE_LISTENER_SERVICE_PORT = 1883
 TRUST_ISSUER_KIND_KEY = "issuerKind"
 TRUST_SETTING_KEYS = frozenset(["issuerName", TRUST_ISSUER_KIND_KEY, "configMapName", "configMapKey"])
 
+EXTENSION_TYPE_PLATFORM = "microsoft.iotoperations.platform"
+EXTENSION_TYPE_OSM = "microsoft.openservicemesh"
+EXTENSION_TYPE_ACS = "microsoft.arc.containerstorage"
+EXTENSION_TYPE_SSC = "microsoft.azure.secretstore"
+EXTENSION_TYPE_OPS = "microsoft.iotoperations"
 
-IOT_OPS_PLAT_EXTENSION_TYPE = "microsoft.iotoperations.platform"
-OSM_EXTENSION_TYPE = "microsoft.openservicemesh"
-ACS_EXTENSION_TYPE = "microsoft.arc.containerstorage"
-SECRET_SYNC_EXTENSION_TYPE = "microsoft.azure.secretstore"
-
-IOT_OPS_EXTENSION_TYPE = "microsoft.iotoperations"
-
-IOT_OPS_EXT_DEPENDENCIES = frozenset(
-    [IOT_OPS_PLAT_EXTENSION_TYPE, OSM_EXTENSION_TYPE, ACS_EXTENSION_TYPE, SECRET_SYNC_EXTENSION_TYPE]
-)
+OPS_EXTENSION_DEPS = frozenset([EXTENSION_TYPE_PLATFORM, EXTENSION_TYPE_OSM, EXTENSION_TYPE_SSC, EXTENSION_TYPE_ACS])
 
 
 class MqMode(Enum):
