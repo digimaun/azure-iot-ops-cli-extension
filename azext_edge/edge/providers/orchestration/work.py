@@ -224,7 +224,6 @@ class WorkManager:
         if not ops_ext_principal_id:
             raise ValidationError(
                 "Unable to determine the IoT Operations system-managed identity principal Id.\n"
-                "This identity needs Contributor or equivalent against the target schema registry.\n"
                 "Please re-deploy via 'az iot ops create'."
             )
 
@@ -375,14 +374,9 @@ class WorkManager:
                     parameters=enablement_parameters,
                     deployment_name=enablement_work_name,
                 )
-                enablement_deploy_link = (
-                    "https://portal.azure.com/#blade/HubsExtension/DeploymentDetailsBlade/id/"
-                    f"%2Fsubscriptions%2F{self.subscription_id}%2FresourceGroups%2F{self._targets.resource_group_name}"
-                    f"%2Fproviders%2FMicrosoft.Resources%2Fdeployments%2F{enablement_work_name}"
-                )
                 # Pattern needs work, it is this way to dynamically update UI
                 self._display.categories[WorkCategoryKey.ENABLE_IOT_OPS][0].title = (
-                    f"[link={enablement_deploy_link}]"
+                    f"[link={self.get_deployment_link(enablement_work_name)}]"
                     f"{self._display.categories[WorkCategoryKey.ENABLE_IOT_OPS][0].title}[/link]"
                 )
                 self._render_display(category=WorkCategoryKey.ENABLE_IOT_OPS)
@@ -425,14 +419,9 @@ class WorkManager:
                     parameters=instance_parameters,
                     deployment_name=instance_work_name,
                 )
-                instance_deploy_link = (
-                    "https://portal.azure.com/#blade/HubsExtension/DeploymentDetailsBlade/id/"
-                    f"%2Fsubscriptions%2F{self.subscription_id}%2FresourceGroups%2F{self._targets.resource_group_name}"
-                    f"%2Fproviders%2FMicrosoft.Resources%2Fdeployments%2F{instance_work_name}"
-                )
                 # Pattern needs work, it is this way to dynamically update UI
                 self._display.categories[WorkCategoryKey.DEPLOY_IOT_OPS][0].title = (
-                    f"[link={instance_deploy_link}]"
+                    f"[link={self.get_deployment_link(instance_work_name)}]"
                     f"{self._display.categories[WorkCategoryKey.DEPLOY_IOT_OPS][0].title}[/link]"
                 )
                 self._render_display(category=WorkCategoryKey.DEPLOY_IOT_OPS)
@@ -577,3 +566,10 @@ class WorkManager:
     def _update_payload(self, **kwargs: dict):
         if not self._show_progress:
             self._result_payload.update(**kwargs)
+
+    def get_deployment_link(self, deployment_name: str) -> str:
+        return (
+            "https://portal.azure.com/#blade/HubsExtension/DeploymentDetailsBlade/id/"
+            f"%2Fsubscriptions%2F{self.subscription_id}%2FresourceGroups%2F{self._targets.resource_group_name}"
+            f"%2Fproviders%2FMicrosoft.Resources%2Fdeployments%2F{deployment_name}"
+        )
