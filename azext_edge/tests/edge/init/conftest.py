@@ -10,15 +10,7 @@ from azext_edge.edge.util import get_timestamp_now_utc
 
 
 def pytest_configure(config):
-    config.addinivalue_line(
-        "markers", "init_scenario_test: mark tests that will run az iot ops init"
-    )
-
-
-@pytest.fixture
-def mocked_deploy(mocker):
-    patched = mocker.patch("azext_edge.edge.providers.orchestration.deploy", autospec=True)
-    yield patched
+    config.addinivalue_line("markers", "init_scenario_test: mark tests that will run az iot ops init")
 
 
 @pytest.fixture
@@ -43,32 +35,6 @@ def mocked_deploy_template(mocker):
 
 
 @pytest.fixture
-def mocked_verify_cli_client_connections(mocker):
-    patched = mocker.patch("azext_edge.edge.providers.orchestration.host.verify_cli_client_connections", autospec=True)
-    yield patched
-
-
-@pytest.fixture
-def mocked_edge_api_keyvault_api_v1(mocker):
-    patched = mocker.patch("azext_edge.edge.providers.edge_api.keyvault.KEYVAULT_API_V1", autospec=False)
-    yield patched
-
-
-@pytest.fixture
-def mocked_verify_write_permission_against_rg(mocker):
-    patched = mocker.patch(
-        "azext_edge.edge.providers.orchestration.permissions.verify_write_permission_against_rg", autospec=True
-    )
-    yield patched
-
-
-@pytest.fixture
-def mocked_wait_for_terminal_state(mocker):
-    patched = mocker.patch("azext_edge.edge.providers.orchestration.work.wait_for_terminal_state", autospec=True)
-    yield patched
-
-
-@pytest.fixture
 def mocked_connected_cluster_location(mocker, request):
     return_value = getattr(request, "param", None) or "mock_location"
     patched = mocker.patch(
@@ -86,14 +52,6 @@ def mocked_connected_cluster_extensions(mocker, request):
         "azext_edge.edge.providers.orchestration.connected_cluster.ConnectedCluster.extensions",
         return_value=return_value,
         new_callable=mocker.PropertyMock,
-    )
-    yield patched
-
-
-@pytest.fixture
-def mocked_verify_custom_locations_enabled(mocker):
-    patched = mocker.patch(
-        "azext_edge.edge.providers.orchestration.base.verify_custom_locations_enabled", autospec=True
     )
     yield patched
 

@@ -6,6 +6,7 @@
 
 
 import json
+import re
 from os import environ
 from pathlib import Path
 from random import randint
@@ -13,52 +14,188 @@ from typing import Dict, FrozenSet, List
 from unittest.mock import Mock
 
 import pytest
+import requests
+import responses
 
 from azext_edge.edge.common import INIT_NO_PREFLIGHT_ENV_KEY
 from azext_edge.edge.providers.base import DEFAULT_NAMESPACE
 from azext_edge.edge.providers.orchestration.common import (
+    ARM_ENDPOINT,
     KubernetesDistroType,
     MqMemoryProfile,
     MqServiceType,
 )
+from azext_edge.edge.providers.orchestration.rp_namespace import RP_NAMESPACE_SET
 from azext_edge.edge.providers.orchestration.work import (
-    CURRENT_TEMPLATE,
+    CONNECTIVITY_STATUS_CONNECTED,
+    PROVISIONING_STATE_SUCCESS,
     WorkCategoryKey,
     WorkManager,
     WorkStepKey,
 )
 
-from ...generators import generate_random_string
+from ...generators import generate_random_string, get_zeroed_subscription
+from .test_template_unit import EXPECTED_EXTENSION_RESOURCE_KEYS
+
+ZEROED_SUBSCRIPTION = get_zeroed_subscription()
 
 
-def build_target_scenario(cluster_name: str, resource_group_name: str, **kwargs):
-    return {
-        "cluster_name": cluster_name,
-        "resource_group_name": resource_group_name,
-        **kwargs,
+path_pattern_base = r"^/subscriptions/[0-9a-fA-F-]+/resourcegroups/[a-zA-Z0-9]+"
+STANDARD_HEADERS = {"content-type": "application/json"}
+
+
+def build_target_scenario(cluster_name: str, resource_group_name: str, **kwargs) -> dict:
+    payload = {
+        "clusterName": cluster_name,
+        "resourceGroup": resource_group_name,
+        "cluster": {
+            "name": cluster_name,
+            "location": generate_random_string(),
+            "properties": {
+                "provisioningState": PROVISIONING_STATE_SUCCESS,
+                "connectivityStatus": CONNECTIVITY_STATUS_CONNECTED,
+                "totalNodeCount": 1,
+            },
+        },
+        "namespace": {
+            "value": [{"namespace": namespace, "registrationState": "Registered"} for namespace in RP_NAMESPACE_SET]
+        },
+        "whatIf": {"status": PROVISIONING_STATE_SUCCESS},
+        "trust": {"userTrust": None},
+        "enableFaultTolerance": None,
+        "ensureLatest": None,
     }
+    if "cluster_properties" in kwargs:
+        payload["cluster"]["properties"].update(kwargs["cluster_properties"])
+        kwargs.pop("cluster_properties")
+
+    payload.update(**kwargs)
+    return payload
 
 
 @pytest.mark.parametrize(
     "target_scenario",
     [
         build_target_scenario(cluster_name=generate_random_string(), resource_group_name=generate_random_string()),
+        build_target_scenario(
+            cluster_name=generate_random_string(),
+            resource_group_name=generate_random_string(),
+            cluster_properties={"totalNodeCount": 3},
+            enableFaultTolerance=True,
+            trust={"userTrust": True},
+        ),
     ],
 )
-def test_iot_ops_init(mocked_cmd: Mock, target_scenario: dict):
+def test_iot_ops_init(
+    mocked_cmd: Mock,
+    mocked_responses: responses,
+    mocked_sleep: Mock,
+    target_scenario: dict,
+):
+    call_map: Dict[str, list] = {
+        "connectivityCheck": [],
+        "getCluster": [],
+        "registerProviders": [],
+        "whatIf": [],
+        "deploy": [],
+    }
+
+    def service_generator(request: requests.PreparedRequest) -> tuple:
+        method: str = request.method
+        url: str = request.url
+        params: dict = request.params
+        path_url: str = request.path_url
+        path_url = path_url.split("?")[0]
+        body_str: str = request.body
+
+        # return (status_code, headers, body)
+        if method == responses.HEAD and url == ARM_ENDPOINT:
+            call_map["connectivityCheck"].append(request)
+            return (200, {}, None)
+
+        if method == responses.GET:
+            if path_url == (
+                f"/subscriptions/{ZEROED_SUBSCRIPTION}/resourcegroups/{target_scenario['resourceGroup']}"
+                f"/providers/Microsoft.Kubernetes/connectedClusters/{target_scenario['clusterName']}"
+            ):
+                call_map["getCluster"].append(request)
+                return (200, STANDARD_HEADERS, json.dumps(target_scenario["cluster"]))
+
+            if path_url == f"/subscriptions/{ZEROED_SUBSCRIPTION}/providers":
+                call_map["registerProviders"].append(request)
+                return (200, STANDARD_HEADERS, json.dumps(target_scenario["namespace"]))
+
+        url_deployment_seg = r"/providers/Microsoft\.Resources/deployments/aziotops\.enablement\.[a-zA-Z0-9\.-]+"
+        if method == responses.POST:
+            if re.match(
+                path_pattern_base + url_deployment_seg + r"/whatIf$",
+                path_url,
+            ):
+                assert params["api-version"] == "2024-03-01"
+                assert f"/resourcegroups/{target_scenario['resourceGroup']}/" in path_url
+                assert_init_deployment_body(body_str=body_str, target_scenario=target_scenario)
+                call_map["whatIf"].append(request)
+                return (200, STANDARD_HEADERS, json.dumps(target_scenario["whatIf"]))
+
+        if method == responses.PUT:
+            if re.match(
+                path_pattern_base + url_deployment_seg,
+                path_url,
+            ):
+                assert params["api-version"] == "2024-03-01"
+                assert f"/resourcegroups/{target_scenario['resourceGroup']}/" in path_url
+                assert_init_deployment_body(body_str=body_str, target_scenario=target_scenario)
+                call_map["deploy"].append(request)
+                return (200, STANDARD_HEADERS, json.dumps({}))
+
+    for method in [
+        responses.GET,
+        responses.HEAD,
+        responses.POST,
+        responses.PUT,
+    ]:
+        mocked_responses.add_callback(method=method, url=re.compile(r".*"), callback=service_generator)
+
     from azext_edge.edge.commands_edge import init
 
     init_call_kwargs = {
         "cmd": mocked_cmd,
-        "cluster_name": target_scenario["cluster_name"],
-        "resource_group_name": target_scenario["resource_group_name"],
-        "enable_fault_tolerance": target_scenario.get("enable_fault_tolerance"),
+        "cluster_name": target_scenario["clusterName"],
+        "resource_group_name": target_scenario["resourceGroup"],
+        "enable_fault_tolerance": target_scenario["enableFaultTolerance"],
+        "user_trust": target_scenario["trust"]["userTrust"],
         "no_progress": True,
-        "ensure_latest": target_scenario.get("ensure_latest"),
-        "wait_sec": 0.1,
+        "ensure_latest": target_scenario["ensureLatest"],
     }
 
     init_result = init(**init_call_kwargs)
+
+    for call in call_map:
+        assert len(call_map[call]) == 1
+
+
+def assert_init_deployment_body(body_str: str, target_scenario: dict):
+    assert body_str
+    body = json.loads(body_str)
+    parameters = body["properties"]["parameters"]
+    assert parameters["clusterName"]["value"] == target_scenario["clusterName"]
+
+    expected_trust_config = {"source": "SelfSigned"}
+    if target_scenario["trust"]["userTrust"]:
+        expected_trust_config = {"source": "CustomerManaged"}
+    assert parameters["trustConfig"]["value"] == expected_trust_config
+
+    expected_advanced_config = {}
+    if target_scenario["enableFaultTolerance"]:
+        expected_advanced_config["edgeStorageAccelerator"] = {"faultToleranceEnabled": True}
+    assert parameters["advancedConfig"]["value"] == expected_advanced_config
+
+    mode = body["properties"]["mode"]
+    assert mode == "Incremental"
+
+    template = body["properties"]["template"]
+    for key in EXPECTED_EXTENSION_RESOURCE_KEYS:
+        assert template["resources"][key]
 
 
 # @pytest.mark.parametrize(

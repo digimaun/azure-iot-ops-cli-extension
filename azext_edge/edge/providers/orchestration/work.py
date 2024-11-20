@@ -305,7 +305,7 @@ class WorkManager:
 
         return self._do_work()
 
-    def _do_work(self):  # noqa: C901
+    def _do_work(self):
         from .base import (
             verify_custom_location_namespace,
             verify_custom_locations_enabled,
@@ -560,12 +560,7 @@ class WorkManager:
                 logger.warning(w + "\n")
 
         # TODO @digimaun - work kpis
-        if self._result_payload:
-            return self._result_payload
-
-    def _update_payload(self, **kwargs: dict):
-        if not self._show_progress:
-            self._result_payload.update(**kwargs)
+        return self._result_payload
 
     def get_deployment_link(self, deployment_name: str) -> str:
         return (
