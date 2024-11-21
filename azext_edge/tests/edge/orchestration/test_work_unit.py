@@ -10,7 +10,7 @@ import re
 from os import environ
 from pathlib import Path
 from random import randint
-from typing import Dict, FrozenSet, List
+from typing import Dict, FrozenSet, List, Optional
 from unittest.mock import Mock
 
 import pytest
@@ -24,6 +24,8 @@ from azext_edge.edge.providers.orchestration.common import (
     KubernetesDistroType,
     MqMemoryProfile,
     MqServiceType,
+    OPS_EXTENSION_DEPS,
+    EXTENSION_TYPE_PLATFORM,
 )
 from azext_edge.edge.providers.orchestration.rp_namespace import RP_NAMESPACE_SET
 from azext_edge.edge.providers.orchestration.work import (
@@ -44,9 +46,33 @@ path_pattern_base = r"^/subscriptions/[0-9a-fA-F-]+/resourcegroups/[a-zA-Z0-9]+"
 STANDARD_HEADERS = {"content-type": "application/json"}
 
 
-def build_target_scenario(cluster_name: str, resource_group_name: str, **kwargs) -> dict:
+def build_target_scenario(
+    cluster_name: str, resource_group_name: str, extension_config_settings: Optional[dict] = None, **kwargs
+) -> dict:
+    schema_registry_name: str = generate_random_string()
+    default_extensions_config = {
+        ext_type: {
+            "id": generate_random_string(),
+            "properties": {
+                "extensionType": ext_type,
+                "provisioningState": PROVISIONING_STATE_SUCCESS,
+                "configurationSettings": {},
+            },
+        }
+        for ext_type in OPS_EXTENSION_DEPS
+    }
+    default_extensions_config[EXTENSION_TYPE_PLATFORM]["properties"]["configurationSettings"][
+        "installCertManager"
+    ] = "true"
+
+    if extension_config_settings:
+        default_extensions_config.update(extension_config_settings)
+    extensions_list = list(default_extensions_config.values())
+
     payload = {
-        "clusterName": cluster_name,
+        "instance": {"name": generate_random_string(), "description": None, "namespace": None},
+        "customLocationName": None,
+        "enableRsyncRules": None,
         "resourceGroup": resource_group_name,
         "cluster": {
             "name": cluster_name,
@@ -56,14 +82,24 @@ def build_target_scenario(cluster_name: str, resource_group_name: str, **kwargs)
                 "connectivityStatus": CONNECTIVITY_STATUS_CONNECTED,
                 "totalNodeCount": 1,
             },
+            "extensions": {"value": extensions_list},
         },
-        "namespace": {
+        "providerNamespace": {
             "value": [{"namespace": namespace, "registrationState": "Registered"} for namespace in RP_NAMESPACE_SET]
         },
         "whatIf": {"status": PROVISIONING_STATE_SUCCESS},
-        "trust": {"userTrust": None},
+        "trust": {"userTrust": None, "settings": None},
         "enableFaultTolerance": None,
         "ensureLatest": None,
+        "schemaRegistry": {
+            "id": (
+                f"/subscriptions/{ZEROED_SUBSCRIPTION}/resourceGroups/{resource_group_name}"
+                f"/providers/microsoft.deviceregistry/schemaRegistries/{schema_registry_name}"
+            ),
+            "name": schema_registry_name,
+        },
+        "dataflow": {"profileInstances": 1},
+        "noProgress": True,
     }
     if "cluster_properties" in kwargs:
         payload["cluster"]["properties"].update(kwargs["cluster_properties"])
@@ -100,7 +136,7 @@ def test_iot_ops_init(
         "deploy": [],
     }
 
-    def service_generator(request: requests.PreparedRequest) -> tuple:
+    def init_service_generator(request: requests.PreparedRequest) -> tuple:
         method: str = request.method
         url: str = request.url
         params: dict = request.params
@@ -116,14 +152,15 @@ def test_iot_ops_init(
         if method == responses.GET:
             if path_url == (
                 f"/subscriptions/{ZEROED_SUBSCRIPTION}/resourcegroups/{target_scenario['resourceGroup']}"
-                f"/providers/Microsoft.Kubernetes/connectedClusters/{target_scenario['clusterName']}"
+                f"/providers/Microsoft.Kubernetes/connectedClusters/{target_scenario['cluster']['name']}"
             ):
                 call_map["getCluster"].append(request)
                 return (200, STANDARD_HEADERS, json.dumps(target_scenario["cluster"]))
 
             if path_url == f"/subscriptions/{ZEROED_SUBSCRIPTION}/providers":
+                assert params["api-version"] == "2024-03-01"
                 call_map["registerProviders"].append(request)
-                return (200, STANDARD_HEADERS, json.dumps(target_scenario["namespace"]))
+                return (200, STANDARD_HEADERS, json.dumps(target_scenario["providerNamespace"]))
 
         url_deployment_seg = r"/providers/Microsoft\.Resources/deployments/aziotops\.enablement\.[a-zA-Z0-9\.-]+"
         if method == responses.POST:
@@ -148,23 +185,25 @@ def test_iot_ops_init(
                 call_map["deploy"].append(request)
                 return (200, STANDARD_HEADERS, json.dumps({}))
 
+        raise RuntimeError(f"No match for {method} {url}.")
+
     for method in [
         responses.GET,
         responses.HEAD,
         responses.POST,
         responses.PUT,
     ]:
-        mocked_responses.add_callback(method=method, url=re.compile(r".*"), callback=service_generator)
+        mocked_responses.add_callback(method=method, url=re.compile(r".*"), callback=init_service_generator)
 
     from azext_edge.edge.commands_edge import init
 
     init_call_kwargs = {
         "cmd": mocked_cmd,
-        "cluster_name": target_scenario["clusterName"],
+        "cluster_name": target_scenario["cluster"]["name"],
         "resource_group_name": target_scenario["resourceGroup"],
         "enable_fault_tolerance": target_scenario["enableFaultTolerance"],
         "user_trust": target_scenario["trust"]["userTrust"],
-        "no_progress": True,
+        "no_progress": target_scenario["noProgress"],
         "ensure_latest": target_scenario["ensureLatest"],
     }
 
@@ -173,12 +212,15 @@ def test_iot_ops_init(
     for call in call_map:
         assert len(call_map[call]) == 1
 
+    if target_scenario["noProgress"]:
+        assert init_result is not None  # @digimaun
+
 
 def assert_init_deployment_body(body_str: str, target_scenario: dict):
     assert body_str
     body = json.loads(body_str)
     parameters = body["properties"]["parameters"]
-    assert parameters["clusterName"]["value"] == target_scenario["clusterName"]
+    assert parameters["clusterName"]["value"] == target_scenario["cluster"]["name"]
 
     expected_trust_config = {"source": "SelfSigned"}
     if target_scenario["trust"]["userTrust"]:
@@ -198,203 +240,170 @@ def assert_init_deployment_body(body_str: str, target_scenario: dict):
         assert template["resources"][key]
 
 
-# @pytest.mark.parametrize(
-#     """
-#     cluster_name,
-#     cluster_namespace,
-#     resource_group_name,
-#     no_deploy,
-#     no_preflight,
-#     disable_rsync_rules,
-#     """,
-#     [
-#         pytest.param(
-#             generate_random_string(),  # cluster_name
-#             None,  # cluster_namespace
-#             generate_random_string(),  # resource_group_name
-#             None,  # no_deploy
-#             None,  # no_preflight
-#             None,  # disable_rsync_rules
-#         ),
-#         pytest.param(
-#             generate_random_string(),  # cluster_name
-#             None,  # cluster_namespace
-#             generate_random_string(),  # resource_group_name
-#             None,  # no_deploy
-#             None,  # no_preflight
-#             None,  # disable_rsync_rules
-#         ),
-#         pytest.param(
-#             generate_random_string(),  # cluster_name
-#             generate_random_string(),  # cluster_namespace
-#             generate_random_string(),  # resource_group_name
-#             None,  # no_deploy
-#             None,  # no_preflight
-#             None,  # disable_rsync_rules
-#         ),
-#         pytest.param(
-#             generate_random_string(),  # cluster_name
-#             None,  # cluster_namespace
-#             generate_random_string(),  # resource_group_name
-#             None,  # no_deploy
-#             None,  # no_preflight
-#             None,  # disable_rsync_rules
-#         ),
-#         pytest.param(
-#             generate_random_string(),  # cluster_name
-#             None,  # cluster_namespace
-#             generate_random_string(),  # resource_group_name
-#             True,  # no_deploy
-#             None,  # no_preflight
-#             None,  # disable_rsync_rules
-#         ),
-#         pytest.param(
-#             generate_random_string(),  # cluster_name
-#             None,  # cluster_namespace
-#             generate_random_string(),  # resource_group_name
-#             True,  # no_deploy
-#             None,  # no_preflight
-#             None,  # disable_rsync_rules
-#         ),
-#         pytest.param(
-#             generate_random_string(),  # cluster_name
-#             None,  # cluster_namespace
-#             generate_random_string(),  # resource_group_name
-#             True,  # no_deploy
-#             True,  # no_preflight
-#             True,  # disable_rsync_rules
-#         ),
-#     ],
-# )
-# def test_work_order(
-#     mocked_cmd: Mock,
-#     mocked_config: Mock,
-#     mocked_deploy_template: Mock,
-#     mocked_register_providers: Mock,
-#     mocked_verify_cli_client_connections: Mock,
-#     mocked_edge_api_keyvault_api_v1: Mock,
-#     mocked_verify_write_permission_against_rg: Mock,
-#     mocked_wait_for_terminal_state: Mock,
-#     mocked_connected_cluster_location: Mock,
-#     mocked_connected_cluster_extensions: Mock,
-#     mocked_verify_custom_locations_enabled: Mock,
-#     mocked_verify_arc_cluster_config: Mock,
-#     mocked_verify_custom_location_namespace: Mock,
-#     spy_get_current_template_copy: Mock,
-#     cluster_name,
-#     cluster_namespace,
-#     resource_group_name,
-#     no_deploy,
-#     no_preflight,
-#     disable_rsync_rules,
-#     spy_work_displays,
-# ):
-#     # TODO: Refactor for simplification
+@pytest.mark.parametrize(
+    "target_scenario",
+    [
+        build_target_scenario(cluster_name=generate_random_string(), resource_group_name=generate_random_string()),
+    ],
+)
+def test_iot_ops_create(
+    mocked_cmd: Mock,
+    mocked_responses: responses,
+    mocked_sleep: Mock,
+    target_scenario: dict,
+):
+    call_map: Dict[str, list] = {
+        "connectivityCheck": [],
+        "getCluster": [],
+        "registerProviders": [],
+        "getSchemaRegistry": [],
+        "getClusterExtensions": [],
+        "whatIf": [],
+        "deploy": [],
+    }
 
-#     call_kwargs = {
-#         "cmd": mocked_cmd,
-#         "cluster_name": cluster_name,
-#         "resource_group_name": resource_group_name,
-#         "no_deploy": no_deploy,
-#         "no_progress": True,
-#         "disable_rsync_rules": disable_rsync_rules,
-#         "wait_sec": 0.25,
-#     }
+    def instance_service_generator(request: requests.PreparedRequest) -> tuple:
+        method: str = request.method
+        url: str = request.url
+        params: dict = request.params
+        path_url: str = request.path_url
+        path_url = path_url.split("?")[0]
+        body_str: str = request.body
 
-#     if no_preflight:
-#         environ[INIT_NO_PREFLIGHT_ENV_KEY] = "true"
+        # return (status_code, headers, body)
+        if method == responses.HEAD and url == ARM_ENDPOINT:
+            call_map["connectivityCheck"].append(request)
+            return (200, {}, None)
 
-#     for param_with_default in [
-#         (cluster_namespace, "cluster_namespace"),
-#     ]:
-#         if param_with_default[0]:
-#             call_kwargs[param_with_default[1]] = param_with_default[0]
+        if method == responses.GET:
+            if path_url == (
+                f"/subscriptions/{ZEROED_SUBSCRIPTION}/resourcegroups/{target_scenario['resourceGroup']}"
+                f"/providers/Microsoft.Kubernetes/connectedClusters/{target_scenario['cluster']['name']}"
+            ):
+                call_map["getCluster"].append(request)
+                return (200, STANDARD_HEADERS, json.dumps(target_scenario["cluster"]))
 
-#     result = init(**call_kwargs)
-#     expected_template_copies = 0
+            if path_url == f"/subscriptions/{ZEROED_SUBSCRIPTION}/providers":
+                assert params["api-version"] == "2024-03-01"
+                call_map["registerProviders"].append(request)
+                return (200, STANDARD_HEADERS, json.dumps(target_scenario["providerNamespace"]))
 
-#     # TODO - @digimaun
-#     # nothing_to_do = all([not keyvault_resource_id, no_tls, no_deploy, no_preflight])
-#     # if nothing_to_do:
-#     #     assert not result
-#     #     mocked_verify_cli_client_connections.assert_not_called()
-#     #     mocked_edge_api_keyvault_api_v1.is_deployed.assert_not_called()
-#     #     return
+            if path_url == (
+                f"/subscriptions/{ZEROED_SUBSCRIPTION}/resourceGroups/{target_scenario['resourceGroup']}"
+                f"/providers/microsoft.deviceregistry/schemaRegistries/{target_scenario['schemaRegistry']['name']}"
+            ):
+                assert params["api-version"] == "2024-09-01-preview"
+                call_map["getSchemaRegistry"].append(request)
+                return (200, STANDARD_HEADERS, json.dumps(target_scenario["schemaRegistry"]))
 
-#     # if any([not no_preflight, not no_deploy, keyvault_resource_id]):
-#     #     mocked_verify_cli_client_connections.assert_called_once()
-#     #     mocked_connected_cluster_location.assert_called_once()
+            if path_url == (
+                f"/subscriptions/{ZEROED_SUBSCRIPTION}/resourceGroups/{target_scenario['resourceGroup']}"
+                f"/providers/Microsoft.Kubernetes/connectedClusters/{target_scenario['cluster']['name']}"
+                f"/providers/Microsoft.KubernetesConfiguration/extensions"
+            ):
+                assert params["api-version"] == "2023-05-01"
+                call_map["getClusterExtensions"].append(request)
+                return (200, STANDARD_HEADERS, json.dumps(target_scenario["cluster"]["extensions"]))
 
-#     expected_cluster_namespace = cluster_namespace.lower() if cluster_namespace else DEFAULT_NAMESPACE
+        url_deployment_seg = r"/providers/Microsoft\.Resources/deployments/aziotops\.instance\.[a-zA-Z0-9\.-]+"
+        if method == responses.POST:
+            if re.match(
+                path_pattern_base + url_deployment_seg + r"/whatIf$",
+                path_url,
+            ):
+                assert params["api-version"] == "2024-03-01"
+                assert f"/resourcegroups/{target_scenario['resourceGroup']}/" in path_url
+                assert_instance_deployment_body(body_str=body_str, target_scenario=target_scenario)
+                call_map["whatIf"].append(request)
+                return (200, STANDARD_HEADERS, json.dumps(target_scenario["whatIf"]))
 
-#     displays_to_eval = []
-#     for category_tuple in [
-#         (not no_preflight, WorkCategoryKey.PRE_FLIGHT),
-#         # (keyvault_resource_id, WorkCategoryKey.CSI_DRIVER),
-#         (not no_deploy, WorkCategoryKey.DEPLOY_AIO),
-#     ]:
-#         if category_tuple[0]:
-#             displays_to_eval.append(category_tuple[1])
-#     _assert_displays_for(set(displays_to_eval), spy_work_displays)
+        if method == responses.PUT:
+            if re.match(
+                path_pattern_base + url_deployment_seg,
+                path_url,
+            ):
+                assert params["api-version"] == "2024-03-01"
+                assert f"/resourcegroups/{target_scenario['resourceGroup']}/" in path_url
+                assert_instance_deployment_body(body_str=body_str, target_scenario=target_scenario)
+                call_map["deploy"].append(request)
+                return (200, STANDARD_HEADERS, json.dumps({}))
 
-#     if not no_preflight:
-#         expected_template_copies += 1
-#         mocked_register_providers.assert_called_once()
-#         mocked_verify_custom_locations_enabled.assert_called_once()
-#         mocked_connected_cluster_extensions.assert_called_once()
-#         mocked_verify_arc_cluster_config.assert_called_once()
-#         mocked_verify_custom_location_namespace.assert_called_once()
+        raise RuntimeError(f"No match for {method} {url}.")
 
-#         if not disable_rsync_rules:
-#             mocked_verify_write_permission_against_rg.assert_called_once()
-#             mocked_verify_write_permission_against_rg.call_args.kwargs["subscription_id"]
-#             mocked_verify_write_permission_against_rg.call_args.kwargs["resource_group_name"] == resource_group_name
-#         else:
-#             mocked_verify_write_permission_against_rg.assert_not_called()
-#     else:
-#         mocked_register_providers.assert_not_called()
-#         mocked_verify_custom_locations_enabled.assert_not_called()
-#         mocked_connected_cluster_extensions.assert_not_called()
-#         mocked_verify_arc_cluster_config.assert_not_called()
-#         mocked_verify_custom_location_namespace.assert_not_called()
+    for method in [
+        responses.GET,
+        responses.HEAD,
+        responses.POST,
+        responses.PUT,
+    ]:
+        mocked_responses.add_callback(method=method, url=re.compile(r".*"), callback=instance_service_generator)
 
-#     if not no_deploy:
-#         expected_template_copies += 1
-#         assert result["deploymentName"]
-#         assert result["resourceGroup"] == resource_group_name
-#         assert result["clusterName"] == cluster_name
-#         assert result["clusterNamespace"]
-#         assert result["deploymentLink"]
-#         assert result["deploymentState"]
-#         assert result["deploymentState"]["status"]
-#         assert result["deploymentState"]["correlationId"]
-#         assert result["deploymentState"]["opsVersion"] == CURRENT_TEMPLATE.get_component_vers()
-#         assert result["deploymentState"]["timestampUtc"]
-#         assert result["deploymentState"]["timestampUtc"]["started"]
-#         assert result["deploymentState"]["timestampUtc"]["ended"]
-#         assert "resources" in result["deploymentState"]
+    from azext_edge.edge.commands_edge import create_instance
 
-#         assert mocked_deploy_template.call_count == 2
-#         assert mocked_deploy_template.call_args.kwargs["template"]
-#         assert mocked_deploy_template.call_args.kwargs["parameters"]
-#         assert mocked_deploy_template.call_args.kwargs["subscription_id"]
-#         assert mocked_deploy_template.call_args.kwargs["resource_group_name"] == resource_group_name
-#         assert mocked_deploy_template.call_args.kwargs["deployment_name"]
-#         assert mocked_deploy_template.call_args.kwargs["cluster_name"] == cluster_name
-#         assert mocked_deploy_template.call_args.kwargs["cluster_namespace"] == expected_cluster_namespace
-#     else:
-#         pass
-# if not nothing_to_do and result:
-#     assert "deploymentName" not in result
-#     assert "resourceGroup" not in result
-#     assert "clusterName" not in result
-#     assert "clusterNamespace" not in result
-#     assert "deploymentLink" not in result
-#     assert "deploymentState" not in result
-# TODO
-# mocked_deploy_template.assert_not_called()
+    create_call_kwargs = {
+        "cmd": mocked_cmd,
+        "cluster_name": target_scenario["cluster"]["name"],
+        "resource_group_name": target_scenario["resourceGroup"],
+        "instance_name": target_scenario["instance"]["name"],
+        "schema_registry_resource_id": target_scenario["schemaRegistry"]["id"],
+        "location": target_scenario["cluster"]["location"],
+        "custom_location_name": target_scenario["customLocationName"],
+        "enable_rsync_rules": target_scenario["enableRsyncRules"],
+        "instance_description": target_scenario["instance"]["description"],
+        "dataflow_profile_instances": target_scenario["dataflow"]["profileInstances"],
+        "trust_settings": target_scenario["trust"]["settings"],
+        # "container_runtime_socket": None,
+        # "kubernetes_distro": None,
+        # "ops_config": None,
+        # "ops_version": None,
+        # "ops_train": None,
+        # "custom_broker_config_file": None,
+        # "broker_memory_profile": str = MqMemoryProfile.medium.value,
+        # "broker_service_type": str = MqServiceType.cluster_ip.value,
+        # "broker_backend_partitions": int = 2,
+        # "broker_backend_workers": int = 2,
+        # "broker_backend_redundancy_factor": int = 2,
+        # "broker_frontend_workers": int = 2,
+        # "broker_frontend_replicas": int = 2,
+        # "add_insecure_listener": Optional[bool] = None,
+        # "tags": Optional[dict] = None,
+        "no_progress": target_scenario["noProgress"],
+    }
+    if target_scenario["instance"]["namespace"]:
+        create_call_kwargs["cluster_namespace"] = target_scenario["instance"]["namespace"]
 
-# assert spy_get_current_template_copy.call_count == expected_template_copies
+    create_result = create_instance(**create_call_kwargs)
+
+    for call in call_map:
+        assert len(call_map[call]) == 1
+
+    if target_scenario["noProgress"]:
+        assert create_result is not None  # @digimaun
+
+
+def assert_instance_deployment_body(body_str: str, target_scenario: dict):
+    # TODO @digimaun
+    assert body_str
+    body = json.loads(body_str)
+    parameters = body["properties"]["parameters"]
+    assert parameters["clusterName"]["value"] == target_scenario["cluster"]["name"]
+
+    expected_trust_config = {"source": "SelfSigned"}
+    if target_scenario["trust"]["userTrust"]:
+        expected_trust_config = {"source": "CustomerManaged"}
+    assert parameters["trustConfig"]["value"] == expected_trust_config
+
+    expected_advanced_config = {}
+    if target_scenario["enableFaultTolerance"]:
+        expected_advanced_config["edgeStorageAccelerator"] = {"faultToleranceEnabled": True}
+    assert parameters["advancedConfig"]["value"] == expected_advanced_config
+
+    mode = body["properties"]["mode"]
+    assert mode == "Incremental"
+
+    template = body["properties"]["template"]
+    for key in EXPECTED_EXTENSION_RESOURCE_KEYS:
+        assert template["resources"][key]
 
 
 # def _assert_displays_for(work_category_set: FrozenSet[WorkCategoryKey], display_spys: Dict[str, Mock]):

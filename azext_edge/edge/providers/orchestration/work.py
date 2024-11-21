@@ -188,15 +188,29 @@ class WorkManager:
             raise ValidationError("Arc Container Storage fault tolerance enablement requires at least 3 nodes.")
 
     def _process_extension_dependencies(self):
-        # TODO - add non-success provisioningState
         missing_exts = []
+        bad_provisioning_state = []
         dependencies = self.ops_extension_dependencies
         for ext in dependencies:
-            if not dependencies.get(ext):
+            ext_attr = dependencies.get(ext)
+            if not ext_attr:
                 missing_exts.append(ext)
+                continue
+
+            ext_provisioning_state: str = ext_attr.get("properties", {}).get("provisioningState")
+            if ext_provisioning_state.lower() != PROVISIONING_STATE_SUCCESS.lower():
+                bad_provisioning_state.append(ext)
+
         if missing_exts:
             raise ValidationError(
                 "Foundational service(s) not detected on the cluster:\n\n"
+                + "\n".join(missing_exts)
+                + "\nInstance deployment will not continue. Please run 'az iot ops init'."
+            )
+
+        if bad_provisioning_state:
+            raise ValidationError(
+                "Foundational service(s) with non-successful provisioning state detected on the cluster:\n\n"
                 + "\n".join(missing_exts)
                 + "\nInstance deployment will not continue. Please run 'az iot ops init'."
             )
