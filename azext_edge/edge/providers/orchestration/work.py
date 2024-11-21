@@ -252,7 +252,7 @@ class WorkManager:
                 ),
                 principal_type=PrincipalType.SERVICE_PRINCIPAL.value,
             )
-        except Exception as e:
+        except HttpResponseError as e:
             self._warnings.append(
                 get_user_msg_warn_ra(
                     prefix=f"Role assignment failed with:\n{str(e)}",

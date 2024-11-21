@@ -10,7 +10,7 @@ import re
 from os import environ
 from pathlib import Path
 from random import randint
-from typing import Dict, FrozenSet, List, Optional
+from typing import Dict, FrozenSet, List, Optional, Tuple
 from unittest.mock import Mock
 
 import pytest
@@ -21,11 +21,13 @@ from azext_edge.edge.common import INIT_NO_PREFLIGHT_ENV_KEY
 from azext_edge.edge.providers.base import DEFAULT_NAMESPACE
 from azext_edge.edge.providers.orchestration.common import (
     ARM_ENDPOINT,
+    EXTENSION_TYPE_PLATFORM,
+    EXTENSION_TYPE_SSC,
+    OPS_EXTENSION_DEPS,
+    EXTENSION_TYPE_OPS,
     KubernetesDistroType,
     MqMemoryProfile,
     MqServiceType,
-    OPS_EXTENSION_DEPS,
-    EXTENSION_TYPE_PLATFORM,
 )
 from azext_edge.edge.providers.orchestration.rp_namespace import RP_NAMESPACE_SET
 from azext_edge.edge.providers.orchestration.work import (
@@ -37,7 +39,7 @@ from azext_edge.edge.providers.orchestration.work import (
 )
 
 from ...generators import generate_random_string, get_zeroed_subscription
-from .test_template_unit import EXPECTED_EXTENSION_RESOURCE_KEYS
+from .test_template_unit import EXPECTED_EXTENSION_RESOURCE_KEYS, EXPECTED_INSTANCE_RESOURCE_KEYS
 
 ZEROED_SUBSCRIPTION = get_zeroed_subscription()
 
@@ -47,9 +49,17 @@ STANDARD_HEADERS = {"content-type": "application/json"}
 
 
 def build_target_scenario(
-    cluster_name: str, resource_group_name: str, extension_config_settings: Optional[dict] = None, **kwargs
+    cluster_name: str,
+    resource_group_name: str,
+    extension_config_settings: Optional[dict] = None,
+    omit_ops_ext: bool = False,
+    **kwargs,
 ) -> dict:
     schema_registry_name: str = generate_random_string()
+
+    expected_extension_types = list(OPS_EXTENSION_DEPS)
+    if not omit_ops_ext:
+        expected_extension_types.append(EXTENSION_TYPE_OPS)
     default_extensions_config = {
         ext_type: {
             "id": generate_random_string(),
@@ -59,11 +69,13 @@ def build_target_scenario(
                 "configurationSettings": {},
             },
         }
-        for ext_type in OPS_EXTENSION_DEPS
+        for ext_type in expected_extension_types
     }
     default_extensions_config[EXTENSION_TYPE_PLATFORM]["properties"]["configurationSettings"][
         "installCertManager"
     ] = "true"
+    if not omit_ops_ext:
+        default_extensions_config[EXTENSION_TYPE_OPS]["identity"] = {"principalId": generate_random_string()}
 
     if extension_config_settings:
         default_extensions_config.update(extension_config_settings)
@@ -73,6 +85,7 @@ def build_target_scenario(
         "instance": {"name": generate_random_string(), "description": None, "namespace": None},
         "customLocationName": None,
         "enableRsyncRules": None,
+        "location": None,
         "resourceGroup": resource_group_name,
         "cluster": {
             "name": cluster_name,
@@ -97,8 +110,10 @@ def build_target_scenario(
                 f"/providers/microsoft.deviceregistry/schemaRegistries/{schema_registry_name}"
             ),
             "name": schema_registry_name,
+            "roleAssignments": {"value": []},
         },
-        "dataflow": {"profileInstances": 1},
+        "dataflow": {"profileInstances": None},
+        "kubernetesDistro": None,
         "noProgress": True,
     }
     if "cluster_properties" in kwargs:
@@ -252,14 +267,16 @@ def test_iot_ops_create(
     mocked_sleep: Mock,
     target_scenario: dict,
 ):
-    call_map: Dict[str, list] = {
-        "connectivityCheck": [],
-        "getCluster": [],
-        "registerProviders": [],
-        "getSchemaRegistry": [],
-        "getClusterExtensions": [],
-        "whatIf": [],
-        "deploy": [],
+    call_map: Dict[str, Tuple[list, int]] = {
+        "connectivityCheck": ([], 1),
+        "getCluster": ([], 1),
+        "registerProviders": ([], 1),
+        "getSchemaReg": ([], 1),
+        "getClusterExtensions": ([], 2),
+        "getSchemaRegRoleAssigns": ([], 1),
+        "putSchemaRegRoleAssign": ([], 1),
+        "whatIf": ([], 1),
+        "deploy": ([], 1),
     }
 
     def instance_service_generator(request: requests.PreparedRequest) -> tuple:
@@ -272,7 +289,7 @@ def test_iot_ops_create(
 
         # return (status_code, headers, body)
         if method == responses.HEAD and url == ARM_ENDPOINT:
-            call_map["connectivityCheck"].append(request)
+            call_map["connectivityCheck"][0].append(request)
             return (200, {}, None)
 
         if method == responses.GET:
@@ -280,12 +297,12 @@ def test_iot_ops_create(
                 f"/subscriptions/{ZEROED_SUBSCRIPTION}/resourcegroups/{target_scenario['resourceGroup']}"
                 f"/providers/Microsoft.Kubernetes/connectedClusters/{target_scenario['cluster']['name']}"
             ):
-                call_map["getCluster"].append(request)
+                call_map["getCluster"][0].append(request)
                 return (200, STANDARD_HEADERS, json.dumps(target_scenario["cluster"]))
 
             if path_url == f"/subscriptions/{ZEROED_SUBSCRIPTION}/providers":
                 assert params["api-version"] == "2024-03-01"
-                call_map["registerProviders"].append(request)
+                call_map["registerProviders"][0].append(request)
                 return (200, STANDARD_HEADERS, json.dumps(target_scenario["providerNamespace"]))
 
             if path_url == (
@@ -293,7 +310,7 @@ def test_iot_ops_create(
                 f"/providers/microsoft.deviceregistry/schemaRegistries/{target_scenario['schemaRegistry']['name']}"
             ):
                 assert params["api-version"] == "2024-09-01-preview"
-                call_map["getSchemaRegistry"].append(request)
+                call_map["getSchemaReg"][0].append(request)
                 return (200, STANDARD_HEADERS, json.dumps(target_scenario["schemaRegistry"]))
 
             if path_url == (
@@ -302,8 +319,19 @@ def test_iot_ops_create(
                 f"/providers/Microsoft.KubernetesConfiguration/extensions"
             ):
                 assert params["api-version"] == "2023-05-01"
-                call_map["getClusterExtensions"].append(request)
+                call_map["getClusterExtensions"][0].append(request)
                 return (200, STANDARD_HEADERS, json.dumps(target_scenario["cluster"]["extensions"]))
+
+            if path_url == (
+                f"/subscriptions/{ZEROED_SUBSCRIPTION}/resourceGroups/{target_scenario['resourceGroup']}"
+                f"/providers/microsoft.deviceregistry/schemaRegistries/{target_scenario['schemaRegistry']['name']}"
+                f"/providers/Microsoft.Authorization/roleAssignments"
+            ):
+                ops_ext_identity = get_ops_extension_identity(target_scenario["cluster"]["extensions"])
+                assert params["api-version"] == "2022-04-01"
+                assert params["$filter"] == f"principalId eq '{ops_ext_identity['principalId']}'"
+                call_map["getSchemaRegRoleAssigns"][0].append(request)
+                return (200, STANDARD_HEADERS, json.dumps(target_scenario["schemaRegistry"]["roleAssignments"]))
 
         url_deployment_seg = r"/providers/Microsoft\.Resources/deployments/aziotops\.instance\.[a-zA-Z0-9\.-]+"
         if method == responses.POST:
@@ -314,7 +342,7 @@ def test_iot_ops_create(
                 assert params["api-version"] == "2024-03-01"
                 assert f"/resourcegroups/{target_scenario['resourceGroup']}/" in path_url
                 assert_instance_deployment_body(body_str=body_str, target_scenario=target_scenario)
-                call_map["whatIf"].append(request)
+                call_map["whatIf"][0].append(request)
                 return (200, STANDARD_HEADERS, json.dumps(target_scenario["whatIf"]))
 
         if method == responses.PUT:
@@ -325,7 +353,17 @@ def test_iot_ops_create(
                 assert params["api-version"] == "2024-03-01"
                 assert f"/resourcegroups/{target_scenario['resourceGroup']}/" in path_url
                 assert_instance_deployment_body(body_str=body_str, target_scenario=target_scenario)
-                call_map["deploy"].append(request)
+                call_map["deploy"][0].append(request)
+                return (200, STANDARD_HEADERS, json.dumps({}))
+
+            if path_url.startswith(
+                f"/subscriptions/{ZEROED_SUBSCRIPTION}/resourceGroups/{target_scenario['resourceGroup']}"
+                f"/providers/microsoft.deviceregistry/schemaRegistries/{target_scenario['schemaRegistry']['name']}"
+                f"/providers/Microsoft.Authorization/roleAssignments/"
+            ):
+                ops_ext_identity = get_ops_extension_identity(target_scenario["cluster"]["extensions"])
+                assert params["api-version"] == "2022-04-01"
+                call_map["putSchemaRegRoleAssign"][0].append(request)
                 return (200, STANDARD_HEADERS, json.dumps({}))
 
         raise RuntimeError(f"No match for {method} {url}.")
@@ -349,8 +387,6 @@ def test_iot_ops_create(
         "location": target_scenario["cluster"]["location"],
         "custom_location_name": target_scenario["customLocationName"],
         "enable_rsync_rules": target_scenario["enableRsyncRules"],
-        "instance_description": target_scenario["instance"]["description"],
-        "dataflow_profile_instances": target_scenario["dataflow"]["profileInstances"],
         "trust_settings": target_scenario["trust"]["settings"],
         # "container_runtime_socket": None,
         # "kubernetes_distro": None,
@@ -371,14 +407,25 @@ def test_iot_ops_create(
     }
     if target_scenario["instance"]["namespace"]:
         create_call_kwargs["cluster_namespace"] = target_scenario["instance"]["namespace"]
+    if target_scenario["instance"]["description"]:
+        create_call_kwargs["instance_description"] = target_scenario["instance"]["description"]
+    if target_scenario["dataflow"]["profileInstances"]:
+        create_call_kwargs["dataflow_profile_instances"] = target_scenario["dataflow"]["profileInstances"]
 
     create_result = create_instance(**create_call_kwargs)
 
     for call in call_map:
-        assert len(call_map[call]) == 1
+        assert len(call_map[call][0]) == call_map[call][1], f"{call} has unexpected call(s)."
 
     if target_scenario["noProgress"]:
         assert create_result is not None  # @digimaun
+
+
+def get_ops_extension_identity(extensions: Dict[str, List[dict]]) -> Optional[dict]:
+
+    for ext in extensions["value"]:
+        if ext["properties"]["extensionType"] == EXTENSION_TYPE_OPS:
+            return ext.get("identity")
 
 
 def assert_instance_deployment_body(body_str: str, target_scenario: dict):
@@ -388,21 +435,50 @@ def assert_instance_deployment_body(body_str: str, target_scenario: dict):
     parameters = body["properties"]["parameters"]
     assert parameters["clusterName"]["value"] == target_scenario["cluster"]["name"]
 
+    assert parameters["clusterNamespace"]["value"] == target_scenario["instance"]["namespace"] or DEFAULT_NAMESPACE
+    assert (
+        parameters["clusterLocation"]["value"] == target_scenario["location"] or target_scenario["cluster"]["location"]
+    )
+
+    assert set(parameters["clExtentionIds"]["value"]) == set(
+        [
+            ext["id"]
+            for ext in target_scenario["cluster"]["extensions"]["value"]
+            if ext["properties"]["extensionType"] in [EXTENSION_TYPE_PLATFORM, EXTENSION_TYPE_SSC]
+        ]
+    )
+    assert parameters["schemaRegistryId"]["value"] == target_scenario["schemaRegistry"]["id"]
+    assert parameters["deployResourceSyncRules"]["value"] == bool(target_scenario["enableRsyncRules"])
+
+    # Optionals
+    assert parameters["defaultDataflowinstanceCount"] == target_scenario["dataflow"]["profileInstances"] or 1
+    assert (
+        parameters["kubernetesDistro"]["value"] == target_scenario["kubernetesDistro"]
+        or KubernetesDistroType.k8s.value
+    )
+    # TODO - @digimaun
+    assert parameters["brokerConfig"] == {
+        "value": {
+            "frontendReplicas": 2,
+            "frontendWorkers": 2,
+            "backendRedundancyFactor": 2,
+            "backendWorkers": 2,
+            "backendPartitions": 2,
+            "memoryProfile": "Medium",
+            "serviceType": "ClusterIp",
+        }
+    }
     expected_trust_config = {"source": "SelfSigned"}
     if target_scenario["trust"]["userTrust"]:
-        expected_trust_config = {"source": "CustomerManaged"}
+        # TODO - @digimaun - trust setting key validation should be handled in target unit tests
+        expected_trust_config = {"source": "CustomerManaged", "settings": target_scenario["trust"]["settings"]}
     assert parameters["trustConfig"]["value"] == expected_trust_config
-
-    expected_advanced_config = {}
-    if target_scenario["enableFaultTolerance"]:
-        expected_advanced_config["edgeStorageAccelerator"] = {"faultToleranceEnabled": True}
-    assert parameters["advancedConfig"]["value"] == expected_advanced_config
 
     mode = body["properties"]["mode"]
     assert mode == "Incremental"
 
     template = body["properties"]["template"]
-    for key in EXPECTED_EXTENSION_RESOURCE_KEYS:
+    for key in EXPECTED_INSTANCE_RESOURCE_KEYS:
         assert template["resources"][key]
 
 
