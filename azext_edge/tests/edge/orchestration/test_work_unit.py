@@ -7,17 +7,16 @@
 
 import json
 import re
-from os import environ
+from enum import Enum
 from pathlib import Path
 from random import randint
-from typing import Dict, FrozenSet, List, Optional, Tuple
+from typing import Dict, FrozenSet, List, Optional, Tuple, NamedTuple
 from unittest.mock import Mock
 
 import pytest
 import requests
 import responses
 
-from azext_edge.edge.common import INIT_NO_PREFLIGHT_ENV_KEY
 from azext_edge.edge.providers.base import DEFAULT_NAMESPACE
 from azext_edge.edge.providers.orchestration.common import (
     ARM_ENDPOINT,
@@ -46,6 +45,183 @@ ZEROED_SUBSCRIPTION = get_zeroed_subscription()
 
 path_pattern_base = r"^/subscriptions/[0-9a-fA-F-]+/resourcegroups/[a-zA-Z0-9]+"
 STANDARD_HEADERS = {"content-type": "application/json"}
+
+
+class CallKey(Enum):
+    CONNECT_RESOURCE_MANAGER = "connectResourceManager"
+    GET_CLUSTER = "getCluster"
+    GET_RESOURCE_PROVIDERS = "getResourceProviders"
+    DEPLOY_INIT_WHATIF = "deployInitWhatIf"
+    DEPLOY_INIT = "deployInit"
+    GET_SCHEMA_REGISTRY = "getSchemaRegistry"
+    GET_CLUSTER_EXTENSIONS = "getClusterExtensions"
+    GET_SCHEMA_REGISTRY_RA = "getSchemaRegistryRoleAssignments"
+    PUT_SCHEMA_REGISTRY_RA = "putSchemaRegistryRoleAssignment"
+    DEPLOY_CREATE_WHATIF = "deployCreateWhatIf"
+    DEPLOY_CREATE = "deployCreate"
+
+
+class RequestKPIs(NamedTuple):
+    method: str
+    url: str
+    params: dict
+    path_url: str
+    body_str: str
+
+
+class ServiceGenerator:
+    def __init__(self, scenario: dict, mocked_responses: responses):
+        self.scenario = scenario
+        self.mocked_responses = mocked_responses
+        self.call_map: Dict[CallKey, List[RequestKPIs]] = {}
+        self._bootstrap()
+
+    def _bootstrap(self):
+        for method in [
+            responses.GET,
+            responses.HEAD,
+            responses.POST,
+            responses.PUT,
+        ]:
+            self.mocked_responses.add_callback(method=method, url=re.compile(r".*"), callback=self._handle_requests)
+        self._reset_call_map()
+
+    def _reset_call_map(self):
+        self.call_map = {}
+        for key in CallKey:
+            self.call_map[key] = []
+
+    def _handle_requests(self, request: requests.PreparedRequest) -> Optional[tuple]:
+        request_kpis = get_request_kpis(request)
+        for handler in [self._handle_common, self._handle_init, self._handle_create]:
+            handler_response = handler(request_kpis)
+            if handler_response:
+                return handler_response
+
+        raise RuntimeError(f"No match for {request_kpis.method} {request_kpis.url}.")
+
+    def _handle_common(self, request_kpis: RequestKPIs) -> Optional[tuple]:
+        # return (status_code, headers, body)
+        if request_kpis.method == responses.HEAD:
+            if request_kpis.url == ARM_ENDPOINT:
+                self.call_map[CallKey.CONNECT_RESOURCE_MANAGER].append(request_kpis)
+                return (200, {}, None)
+
+        if request_kpis.method == responses.GET:
+            if request_kpis.path_url == f"/subscriptions/{ZEROED_SUBSCRIPTION}/providers":
+                assert request_kpis.params["api-version"] == "2024-03-01"
+                self.call_map[CallKey.GET_RESOURCE_PROVIDERS].append(request_kpis)
+                return (200, STANDARD_HEADERS, json.dumps(self.scenario["providerNamespace"]))
+
+            if request_kpis.path_url == (
+                f"/subscriptions/{ZEROED_SUBSCRIPTION}/resourcegroups/{self.scenario['resourceGroup']}"
+                f"/providers/Microsoft.Kubernetes/connectedClusters/{self.scenario['cluster']['name']}"
+            ):
+                assert request_kpis.params["api-version"] == "2024-07-15-preview"
+                self.call_map[CallKey.GET_CLUSTER].append(request_kpis)
+                return (200, STANDARD_HEADERS, json.dumps(self.scenario["cluster"]))
+
+    def _handle_init(self, request_kpis: RequestKPIs):
+        url_deployment_seg = r"/providers/Microsoft\.Resources/deployments/aziotops\.enablement\.[a-zA-Z0-9\.-]+"
+        if request_kpis.method == responses.POST:
+            if re.match(
+                path_pattern_base + url_deployment_seg + r"/whatIf$",
+                request_kpis.path_url,
+            ):
+                assert request_kpis.params["api-version"] == "2024-03-01"
+                assert f"/resourcegroups/{self.scenario['resourceGroup']}/" in request_kpis.path_url
+                assert_init_deployment_body(body_str=request_kpis.body_str, target_scenario=self.scenario)
+                self.call_map[CallKey.DEPLOY_INIT_WHATIF].append(request_kpis)
+                return (200, STANDARD_HEADERS, json.dumps(self.scenario["whatIf"]))
+
+        if request_kpis.method == responses.PUT:
+            if re.match(
+                path_pattern_base + url_deployment_seg,
+                request_kpis.path_url,
+            ):
+                assert request_kpis.params["api-version"] == "2024-03-01"
+                assert f"/resourcegroups/{self.scenario['resourceGroup']}/" in request_kpis.path_url
+                assert_init_deployment_body(body_str=request_kpis.body_str, target_scenario=self.scenario)
+                self.call_map[CallKey.DEPLOY_INIT].append(request_kpis)
+                return (200, STANDARD_HEADERS, json.dumps({}))
+
+    def _handle_create(self, request_kpis: RequestKPIs):
+        if request_kpis.method == responses.GET:
+            if request_kpis.path_url == (
+                f"/subscriptions/{ZEROED_SUBSCRIPTION}/resourceGroups/{self.scenario['resourceGroup']}"
+                f"/providers/microsoft.deviceregistry/schemaRegistries/{self.scenario['schemaRegistry']['name']}"
+            ):
+                assert request_kpis.params["api-version"] == "2024-09-01-preview"
+                self.call_map[CallKey.GET_SCHEMA_REGISTRY].append(request_kpis)
+                return (200, STANDARD_HEADERS, json.dumps(self.scenario["schemaRegistry"]))
+
+            if request_kpis.path_url == (
+                f"/subscriptions/{ZEROED_SUBSCRIPTION}/resourceGroups/{self.scenario['resourceGroup']}"
+                f"/providers/microsoft.deviceregistry/schemaRegistries/{self.scenario['schemaRegistry']['name']}"
+                f"/providers/Microsoft.Authorization/roleAssignments"
+            ):
+                ops_ext_identity = self._get_extension_identity()
+                assert request_kpis.params["api-version"] == "2022-04-01"
+                assert request_kpis.params["$filter"] == f"principalId eq '{ops_ext_identity['principalId']}'"
+                self.call_map[CallKey.GET_SCHEMA_REGISTRY_RA].append(request_kpis)
+                return (200, STANDARD_HEADERS, json.dumps(self.scenario["schemaRegistry"]["roleAssignments"]))
+
+            if request_kpis.path_url == (
+                f"/subscriptions/{ZEROED_SUBSCRIPTION}/resourceGroups/{self.scenario['resourceGroup']}"
+                f"/providers/Microsoft.Kubernetes/connectedClusters/{self.scenario['cluster']['name']}"
+                f"/providers/Microsoft.KubernetesConfiguration/extensions"
+            ):
+                assert request_kpis.params["api-version"] == "2023-05-01"
+                self.call_map[CallKey.GET_CLUSTER_EXTENSIONS].append(request_kpis)
+                return (200, STANDARD_HEADERS, json.dumps(self.scenario["cluster"]["extensions"]))
+
+        url_deployment_seg = r"/providers/Microsoft\.Resources/deployments/aziotops\.instance\.[a-zA-Z0-9\.-]+"
+        if request_kpis.method == responses.POST:
+            if re.match(
+                path_pattern_base + url_deployment_seg + r"/whatIf$",
+                request_kpis.path_url,
+            ):
+                assert request_kpis.params["api-version"] == "2024-03-01"
+                assert f"/resourcegroups/{self.scenario['resourceGroup']}/" in request_kpis.path_url
+                assert_instance_deployment_body(body_str=request_kpis.body_str, target_scenario=self.scenario)
+                self.call_map[CallKey.DEPLOY_CREATE_WHATIF].append(request_kpis)
+                return (200, STANDARD_HEADERS, json.dumps(self.scenario["whatIf"]))
+
+        if request_kpis.method == responses.PUT:
+            if re.match(
+                path_pattern_base + url_deployment_seg,
+                request_kpis.path_url,
+            ):
+                assert request_kpis.params["api-version"] == "2024-03-01"
+                assert f"/resourcegroups/{self.scenario['resourceGroup']}/" in request_kpis.path_url
+                assert_instance_deployment_body(body_str=request_kpis.body_str, target_scenario=self.scenario)
+                self.call_map[CallKey.DEPLOY_CREATE].append(request_kpis)
+                return (200, STANDARD_HEADERS, json.dumps({}))
+
+            if request_kpis.path_url.startswith(
+                f"/subscriptions/{ZEROED_SUBSCRIPTION}/resourceGroups/{self.scenario['resourceGroup']}"
+                f"/providers/microsoft.deviceregistry/schemaRegistries/{self.scenario['schemaRegistry']['name']}"
+                f"/providers/Microsoft.Authorization/roleAssignments/"
+            ):
+                ops_ext_identity = self._get_extension_identity()
+                assert request_kpis.params["api-version"] == "2022-04-01"
+                self.call_map[CallKey.PUT_SCHEMA_REGISTRY_RA].append(request_kpis)
+                return (200, STANDARD_HEADERS, json.dumps({}))
+
+    def _get_extension_identity(self, extension_type: str = EXTENSION_TYPE_OPS) -> Optional[dict]:
+        for ext in self.scenario["cluster"]["extensions"]["value"]:
+            if ext["properties"]["extensionType"] == extension_type:
+                return ext.get("identity")
+
+
+def get_request_kpis(request: requests.PreparedRequest):
+    return RequestKPIs(
+        method=request.method,
+        url=request.url,
+        params=request.params,
+        path_url=request.path_url.split("?")[0],
+        body_str=request.body,
+    )
 
 
 def build_target_scenario(
@@ -124,6 +300,14 @@ def build_target_scenario(
     return payload
 
 
+def assert_call_map(expected_call_count_map: dict, call_map: dict):
+    for key in call_map:
+        expected_count = 0
+        if key in expected_call_count_map:
+            expected_count = expected_call_count_map[key]
+        assert len(call_map[key]) == expected_count, f"{key} has unexpected call(s)."
+
+
 @pytest.mark.parametrize(
     "target_scenario",
     [
@@ -143,73 +327,7 @@ def test_iot_ops_init(
     mocked_sleep: Mock,
     target_scenario: dict,
 ):
-    call_map: Dict[str, list] = {
-        "connectivityCheck": [],
-        "getCluster": [],
-        "registerProviders": [],
-        "whatIf": [],
-        "deploy": [],
-    }
-
-    def init_service_generator(request: requests.PreparedRequest) -> tuple:
-        method: str = request.method
-        url: str = request.url
-        params: dict = request.params
-        path_url: str = request.path_url
-        path_url = path_url.split("?")[0]
-        body_str: str = request.body
-
-        # return (status_code, headers, body)
-        if method == responses.HEAD and url == ARM_ENDPOINT:
-            call_map["connectivityCheck"].append(request)
-            return (200, {}, None)
-
-        if method == responses.GET:
-            if path_url == (
-                f"/subscriptions/{ZEROED_SUBSCRIPTION}/resourcegroups/{target_scenario['resourceGroup']}"
-                f"/providers/Microsoft.Kubernetes/connectedClusters/{target_scenario['cluster']['name']}"
-            ):
-                call_map["getCluster"].append(request)
-                return (200, STANDARD_HEADERS, json.dumps(target_scenario["cluster"]))
-
-            if path_url == f"/subscriptions/{ZEROED_SUBSCRIPTION}/providers":
-                assert params["api-version"] == "2024-03-01"
-                call_map["registerProviders"].append(request)
-                return (200, STANDARD_HEADERS, json.dumps(target_scenario["providerNamespace"]))
-
-        url_deployment_seg = r"/providers/Microsoft\.Resources/deployments/aziotops\.enablement\.[a-zA-Z0-9\.-]+"
-        if method == responses.POST:
-            if re.match(
-                path_pattern_base + url_deployment_seg + r"/whatIf$",
-                path_url,
-            ):
-                assert params["api-version"] == "2024-03-01"
-                assert f"/resourcegroups/{target_scenario['resourceGroup']}/" in path_url
-                assert_init_deployment_body(body_str=body_str, target_scenario=target_scenario)
-                call_map["whatIf"].append(request)
-                return (200, STANDARD_HEADERS, json.dumps(target_scenario["whatIf"]))
-
-        if method == responses.PUT:
-            if re.match(
-                path_pattern_base + url_deployment_seg,
-                path_url,
-            ):
-                assert params["api-version"] == "2024-03-01"
-                assert f"/resourcegroups/{target_scenario['resourceGroup']}/" in path_url
-                assert_init_deployment_body(body_str=body_str, target_scenario=target_scenario)
-                call_map["deploy"].append(request)
-                return (200, STANDARD_HEADERS, json.dumps({}))
-
-        raise RuntimeError(f"No match for {method} {url}.")
-
-    for method in [
-        responses.GET,
-        responses.HEAD,
-        responses.POST,
-        responses.PUT,
-    ]:
-        mocked_responses.add_callback(method=method, url=re.compile(r".*"), callback=init_service_generator)
-
+    servgen = ServiceGenerator(scenario=target_scenario, mocked_responses=mocked_responses)
     from azext_edge.edge.commands_edge import init
 
     init_call_kwargs = {
@@ -223,12 +341,17 @@ def test_iot_ops_init(
     }
 
     init_result = init(**init_call_kwargs)
-
-    for call in call_map:
-        assert len(call_map[call]) == 1
+    expected_call_count_map = {
+        CallKey.CONNECT_RESOURCE_MANAGER: 1,
+        CallKey.GET_RESOURCE_PROVIDERS: 1,  # TODO: Register RPs
+        CallKey.GET_CLUSTER: 1,
+        CallKey.DEPLOY_INIT_WHATIF: 1,
+        CallKey.DEPLOY_INIT: 1,
+    }
+    assert_call_map(expected_call_count_map, servgen.call_map)
 
     if target_scenario["noProgress"]:
-        assert init_result is not None  # @digimaun
+        assert init_result is not None  # TODO - @digimaun
 
 
 def assert_init_deployment_body(body_str: str, target_scenario: dict):
@@ -267,115 +390,7 @@ def test_iot_ops_create(
     mocked_sleep: Mock,
     target_scenario: dict,
 ):
-    call_map: Dict[str, Tuple[list, int]] = {
-        "connectivityCheck": ([], 1),
-        "getCluster": ([], 1),
-        "registerProviders": ([], 1),
-        "getSchemaReg": ([], 1),
-        "getClusterExtensions": ([], 2),
-        "getSchemaRegRoleAssigns": ([], 1),
-        "putSchemaRegRoleAssign": ([], 1),
-        "whatIf": ([], 1),
-        "deploy": ([], 1),
-    }
-
-    def instance_service_generator(request: requests.PreparedRequest) -> tuple:
-        method: str = request.method
-        url: str = request.url
-        params: dict = request.params
-        path_url: str = request.path_url
-        path_url = path_url.split("?")[0]
-        body_str: str = request.body
-
-        # return (status_code, headers, body)
-        if method == responses.HEAD and url == ARM_ENDPOINT:
-            call_map["connectivityCheck"][0].append(request)
-            return (200, {}, None)
-
-        if method == responses.GET:
-            if path_url == (
-                f"/subscriptions/{ZEROED_SUBSCRIPTION}/resourcegroups/{target_scenario['resourceGroup']}"
-                f"/providers/Microsoft.Kubernetes/connectedClusters/{target_scenario['cluster']['name']}"
-            ):
-                call_map["getCluster"][0].append(request)
-                return (200, STANDARD_HEADERS, json.dumps(target_scenario["cluster"]))
-
-            if path_url == f"/subscriptions/{ZEROED_SUBSCRIPTION}/providers":
-                assert params["api-version"] == "2024-03-01"
-                call_map["registerProviders"][0].append(request)
-                return (200, STANDARD_HEADERS, json.dumps(target_scenario["providerNamespace"]))
-
-            if path_url == (
-                f"/subscriptions/{ZEROED_SUBSCRIPTION}/resourceGroups/{target_scenario['resourceGroup']}"
-                f"/providers/microsoft.deviceregistry/schemaRegistries/{target_scenario['schemaRegistry']['name']}"
-            ):
-                assert params["api-version"] == "2024-09-01-preview"
-                call_map["getSchemaReg"][0].append(request)
-                return (200, STANDARD_HEADERS, json.dumps(target_scenario["schemaRegistry"]))
-
-            if path_url == (
-                f"/subscriptions/{ZEROED_SUBSCRIPTION}/resourceGroups/{target_scenario['resourceGroup']}"
-                f"/providers/Microsoft.Kubernetes/connectedClusters/{target_scenario['cluster']['name']}"
-                f"/providers/Microsoft.KubernetesConfiguration/extensions"
-            ):
-                assert params["api-version"] == "2023-05-01"
-                call_map["getClusterExtensions"][0].append(request)
-                return (200, STANDARD_HEADERS, json.dumps(target_scenario["cluster"]["extensions"]))
-
-            if path_url == (
-                f"/subscriptions/{ZEROED_SUBSCRIPTION}/resourceGroups/{target_scenario['resourceGroup']}"
-                f"/providers/microsoft.deviceregistry/schemaRegistries/{target_scenario['schemaRegistry']['name']}"
-                f"/providers/Microsoft.Authorization/roleAssignments"
-            ):
-                ops_ext_identity = get_ops_extension_identity(target_scenario["cluster"]["extensions"])
-                assert params["api-version"] == "2022-04-01"
-                assert params["$filter"] == f"principalId eq '{ops_ext_identity['principalId']}'"
-                call_map["getSchemaRegRoleAssigns"][0].append(request)
-                return (200, STANDARD_HEADERS, json.dumps(target_scenario["schemaRegistry"]["roleAssignments"]))
-
-        url_deployment_seg = r"/providers/Microsoft\.Resources/deployments/aziotops\.instance\.[a-zA-Z0-9\.-]+"
-        if method == responses.POST:
-            if re.match(
-                path_pattern_base + url_deployment_seg + r"/whatIf$",
-                path_url,
-            ):
-                assert params["api-version"] == "2024-03-01"
-                assert f"/resourcegroups/{target_scenario['resourceGroup']}/" in path_url
-                assert_instance_deployment_body(body_str=body_str, target_scenario=target_scenario)
-                call_map["whatIf"][0].append(request)
-                return (200, STANDARD_HEADERS, json.dumps(target_scenario["whatIf"]))
-
-        if method == responses.PUT:
-            if re.match(
-                path_pattern_base + url_deployment_seg,
-                path_url,
-            ):
-                assert params["api-version"] == "2024-03-01"
-                assert f"/resourcegroups/{target_scenario['resourceGroup']}/" in path_url
-                assert_instance_deployment_body(body_str=body_str, target_scenario=target_scenario)
-                call_map["deploy"][0].append(request)
-                return (200, STANDARD_HEADERS, json.dumps({}))
-
-            if path_url.startswith(
-                f"/subscriptions/{ZEROED_SUBSCRIPTION}/resourceGroups/{target_scenario['resourceGroup']}"
-                f"/providers/microsoft.deviceregistry/schemaRegistries/{target_scenario['schemaRegistry']['name']}"
-                f"/providers/Microsoft.Authorization/roleAssignments/"
-            ):
-                ops_ext_identity = get_ops_extension_identity(target_scenario["cluster"]["extensions"])
-                assert params["api-version"] == "2022-04-01"
-                call_map["putSchemaRegRoleAssign"][0].append(request)
-                return (200, STANDARD_HEADERS, json.dumps({}))
-
-        raise RuntimeError(f"No match for {method} {url}.")
-
-    for method in [
-        responses.GET,
-        responses.HEAD,
-        responses.POST,
-        responses.PUT,
-    ]:
-        mocked_responses.add_callback(method=method, url=re.compile(r".*"), callback=instance_service_generator)
-
+    servgen = ServiceGenerator(scenario=target_scenario, mocked_responses=mocked_responses)
     from azext_edge.edge.commands_edge import create_instance
 
     create_call_kwargs = {
@@ -414,22 +429,24 @@ def test_iot_ops_create(
 
     create_result = create_instance(**create_call_kwargs)
 
-    for call in call_map:
-        assert len(call_map[call][0]) == call_map[call][1], f"{call} has unexpected call(s)."
+    expected_call_count_map = {
+        CallKey.CONNECT_RESOURCE_MANAGER: 1,
+        CallKey.GET_RESOURCE_PROVIDERS: 1,  # TODO: Register RPs
+        CallKey.GET_CLUSTER: 1,
+        CallKey.GET_SCHEMA_REGISTRY: 1,
+        CallKey.GET_CLUSTER_EXTENSIONS: 2,
+        CallKey.GET_SCHEMA_REGISTRY_RA: 1,
+        CallKey.PUT_SCHEMA_REGISTRY_RA: 1,
+        CallKey.DEPLOY_CREATE_WHATIF: 1,
+        CallKey.DEPLOY_CREATE: 1,
+    }
+    assert_call_map(expected_call_count_map, servgen.call_map)
 
     if target_scenario["noProgress"]:
         assert create_result is not None  # @digimaun
 
 
-def get_ops_extension_identity(extensions: Dict[str, List[dict]]) -> Optional[dict]:
-
-    for ext in extensions["value"]:
-        if ext["properties"]["extensionType"] == EXTENSION_TYPE_OPS:
-            return ext.get("identity")
-
-
 def assert_instance_deployment_body(body_str: str, target_scenario: dict):
-    # TODO @digimaun
     assert body_str
     body = json.loads(body_str)
     parameters = body["properties"]["parameters"]
@@ -440,13 +457,14 @@ def assert_instance_deployment_body(body_str: str, target_scenario: dict):
         parameters["clusterLocation"]["value"] == target_scenario["location"] or target_scenario["cluster"]["location"]
     )
 
-    assert set(parameters["clExtentionIds"]["value"]) == set(
+    cl_extension_ids = set(
         [
             ext["id"]
             for ext in target_scenario["cluster"]["extensions"]["value"]
             if ext["properties"]["extensionType"] in [EXTENSION_TYPE_PLATFORM, EXTENSION_TYPE_SSC]
         ]
     )
+    assert set(parameters["clExtentionIds"]["value"]) == cl_extension_ids
     assert parameters["schemaRegistryId"]["value"] == target_scenario["schemaRegistry"]["id"]
     assert parameters["deployResourceSyncRules"]["value"] == bool(target_scenario["enableRsyncRules"])
 
