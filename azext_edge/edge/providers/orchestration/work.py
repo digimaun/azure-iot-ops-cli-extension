@@ -205,14 +205,14 @@ class WorkManager:
             raise ValidationError(
                 "Foundational service(s) not detected on the cluster:\n\n"
                 + "\n".join(missing_exts)
-                + "\nInstance deployment will not continue. Please run 'az iot ops init'."
+                + "\n\nInstance deployment will not continue. Please run 'az iot ops init'."
             )
 
         if bad_provisioning_state:
             raise ValidationError(
                 "Foundational service(s) with non-successful provisioning state detected on the cluster:\n\n"
-                + "\n".join(missing_exts)
-                + "\nInstance deployment will not continue. Please run 'az iot ops init'."
+                + "\n".join(bad_provisioning_state)
+                + "\n\nInstance deployment will not continue. Please run 'az iot ops init'."
             )
 
         # validate trust config in platform extension matches trust settings in create

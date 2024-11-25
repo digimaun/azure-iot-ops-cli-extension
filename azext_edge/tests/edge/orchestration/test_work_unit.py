@@ -10,20 +10,21 @@ import re
 from enum import Enum
 from pathlib import Path
 from random import randint
-from typing import Dict, FrozenSet, List, Optional, Tuple, NamedTuple
+from typing import Callable, Dict, FrozenSet, List, NamedTuple, Optional, Type, Union
 from unittest.mock import Mock
 
 import pytest
 import requests
 import responses
+from azure.cli.core.azclierror import ValidationError
 
 from azext_edge.edge.providers.base import DEFAULT_NAMESPACE
 from azext_edge.edge.providers.orchestration.common import (
     ARM_ENDPOINT,
+    EXTENSION_TYPE_OPS,
     EXTENSION_TYPE_PLATFORM,
     EXTENSION_TYPE_SSC,
     OPS_EXTENSION_DEPS,
-    EXTENSION_TYPE_OPS,
     KubernetesDistroType,
     MqMemoryProfile,
     MqServiceType,
@@ -38,7 +39,10 @@ from azext_edge.edge.providers.orchestration.work import (
 )
 
 from ...generators import generate_random_string, get_zeroed_subscription
-from .test_template_unit import EXPECTED_EXTENSION_RESOURCE_KEYS, EXPECTED_INSTANCE_RESOURCE_KEYS
+from .test_template_unit import (
+    EXPECTED_EXTENSION_RESOURCE_KEYS,
+    EXPECTED_INSTANCE_RESOURCE_KEYS,
+)
 
 ZEROED_SUBSCRIPTION = get_zeroed_subscription()
 
@@ -69,21 +73,36 @@ class RequestKPIs(NamedTuple):
     body_str: str
 
 
+class ExceptionMeta(NamedTuple):
+    exc_type: Type[Exception]
+    exc_msg: Union[str, List[str]] = ""
+
+
 class ServiceGenerator:
-    def __init__(self, scenario: dict, mocked_responses: responses):
+    def __init__(
+        self,
+        scenario: dict,
+        mocked_responses: responses,
+    ):
         self.scenario = scenario
         self.mocked_responses = mocked_responses
         self.call_map: Dict[CallKey, List[RequestKPIs]] = {}
         self._bootstrap()
 
     def _bootstrap(self):
+        omit_methods: Optional[FrozenSet[str]] = self.scenario.get("omitHttpMethods")
+        if not omit_methods:
+            omit_methods = frozenset([])
         for method in [
             responses.GET,
             responses.HEAD,
             responses.POST,
             responses.PUT,
         ]:
-            self.mocked_responses.add_callback(method=method, url=re.compile(r".*"), callback=self._handle_requests)
+            if method not in omit_methods:
+                self.mocked_responses.add_callback(
+                    method=method, url=re.compile(r".*"), callback=self._handle_requests
+                )
         self._reset_call_map()
 
     def _reset_call_map(self):
@@ -228,14 +247,18 @@ def build_target_scenario(
     cluster_name: str,
     resource_group_name: str,
     extension_config_settings: Optional[dict] = None,
-    omit_ops_ext: bool = False,
+    omit_extension_types: Optional[FrozenSet[str]] = None,
+    omit_http_methods: Optional[FrozenSet[str]] = None,
+    raises: Optional[ExceptionMeta] = None,
     **kwargs,
 ) -> dict:
     schema_registry_name: str = generate_random_string()
 
-    expected_extension_types = list(OPS_EXTENSION_DEPS)
-    if not omit_ops_ext:
-        expected_extension_types.append(EXTENSION_TYPE_OPS)
+    expected_extension_types: List[str] = list(OPS_EXTENSION_DEPS)
+    expected_extension_types.append(EXTENSION_TYPE_OPS)
+    if omit_extension_types:
+        [expected_extension_types.remove(ext_type) for ext_type in omit_extension_types]
+
     default_extensions_config = {
         ext_type: {
             "id": generate_random_string(),
@@ -247,10 +270,11 @@ def build_target_scenario(
         }
         for ext_type in expected_extension_types
     }
-    default_extensions_config[EXTENSION_TYPE_PLATFORM]["properties"]["configurationSettings"][
-        "installCertManager"
-    ] = "true"
-    if not omit_ops_ext:
+    if EXTENSION_TYPE_PLATFORM in default_extensions_config:
+        default_extensions_config[EXTENSION_TYPE_PLATFORM]["properties"]["configurationSettings"][
+            "installCertManager"
+        ] = "true"
+    if EXTENSION_TYPE_OPS in default_extensions_config:
         default_extensions_config[EXTENSION_TYPE_OPS]["identity"] = {"principalId": generate_random_string()}
 
     if extension_config_settings:
@@ -291,6 +315,8 @@ def build_target_scenario(
         "dataflow": {"profileInstances": None},
         "kubernetesDistro": None,
         "noProgress": True,
+        "raises": raises,
+        "omitHttpMethods": omit_http_methods,
     }
     if "cluster_properties" in kwargs:
         payload["cluster"]["properties"].update(kwargs["cluster_properties"])
@@ -308,6 +334,19 @@ def assert_call_map(expected_call_count_map: dict, call_map: dict):
         assert len(call_map[key]) == expected_count, f"{key} has unexpected call(s)."
 
 
+def assert_exception(expected_exc_meta: ExceptionMeta, call_func: Callable, call_kwargs: dict):
+    expected_exc_meta: ExceptionMeta
+    with pytest.raises(expected_exc_meta.exc_type) as e:
+        call_func(**call_kwargs)
+    exc_msg = str(e.value)
+    if expected_exc_meta.exc_msg:
+        if isinstance(expected_exc_meta.exc_msg, list):
+            for msg_seg in expected_exc_meta.exc_msg:
+                assert msg_seg in exc_msg
+            return
+        assert expected_exc_meta.exc_msg in exc_msg
+
+
 @pytest.mark.parametrize(
     "target_scenario",
     [
@@ -317,7 +356,39 @@ def assert_call_map(expected_call_count_map: dict, call_map: dict):
             resource_group_name=generate_random_string(),
             cluster_properties={"totalNodeCount": 3},
             enableFaultTolerance=True,
+        ),
+        build_target_scenario(
+            cluster_name=generate_random_string(),
+            resource_group_name=generate_random_string(),
             trust={"userTrust": True},
+        ),
+        build_target_scenario(
+            cluster_name=generate_random_string(),
+            resource_group_name=generate_random_string(),
+            cluster_properties={"totalNodeCount": 3},
+            enableFaultTolerance=True,
+            trust={"userTrust": True},
+        ),
+        build_target_scenario(
+            cluster_name=generate_random_string(),
+            resource_group_name=generate_random_string(),
+            cluster_properties={"connectivityStatus": "Disconnected"},
+            raises=ExceptionMeta(
+                exc_type=ValidationError,
+                exc_msg="connectivityStatus is not Connected.",
+            ),
+            omit_http_methods=frozenset([responses.PUT, responses.POST]),
+        ),
+        build_target_scenario(
+            cluster_name=generate_random_string(),
+            resource_group_name=generate_random_string(),
+            cluster_properties={"totalNodeCount": 1},
+            enableFaultTolerance=True,
+            raises=ExceptionMeta(
+                exc_type=ValidationError,
+                exc_msg="Arc Container Storage fault tolerance enablement requires at least 3 nodes.",
+            ),
+            omit_http_methods=frozenset([responses.PUT, responses.POST]),
         ),
     ],
 )
@@ -334,11 +405,19 @@ def test_iot_ops_init(
         "cmd": mocked_cmd,
         "cluster_name": target_scenario["cluster"]["name"],
         "resource_group_name": target_scenario["resourceGroup"],
-        "enable_fault_tolerance": target_scenario["enableFaultTolerance"],
-        "user_trust": target_scenario["trust"]["userTrust"],
         "no_progress": target_scenario["noProgress"],
         "ensure_latest": target_scenario["ensureLatest"],
     }
+    if target_scenario["enableFaultTolerance"]:
+        init_call_kwargs["enable_fault_tolerance"] = target_scenario["enableFaultTolerance"]
+    if target_scenario["trust"]["userTrust"]:
+        init_call_kwargs["user_trust"] = target_scenario["trust"]["userTrust"]
+
+    exc_meta: Optional[ExceptionMeta] = target_scenario.get("raises")
+    if exc_meta:
+        exc_meta: ExceptionMeta
+        assert_exception(expected_exc_meta=exc_meta, call_func=init, call_kwargs=init_call_kwargs)
+        return
 
     init_result = init(**init_call_kwargs)
     expected_call_count_map = {
@@ -382,6 +461,58 @@ def assert_init_deployment_body(body_str: str, target_scenario: dict):
     "target_scenario",
     [
         build_target_scenario(cluster_name=generate_random_string(), resource_group_name=generate_random_string()),
+        build_target_scenario(
+            cluster_name=generate_random_string(),
+            resource_group_name=generate_random_string(),
+            cluster_properties={"connectivityStatus": "Disconnected"},
+            raises=ExceptionMeta(
+                exc_type=ValidationError,
+                exc_msg="connectivityStatus is not Connected.",
+            ),
+            omit_http_methods=frozenset([responses.PUT, responses.POST]),
+        ),
+        build_target_scenario(
+            cluster_name=generate_random_string(),
+            resource_group_name=generate_random_string(),
+            extension_config_settings={
+                EXTENSION_TYPE_PLATFORM: {
+                    "properties": {
+                        "extensionType": EXTENSION_TYPE_PLATFORM,
+                        "provisioningState": "Failed",
+                    }
+                },
+                EXTENSION_TYPE_SSC: {
+                    "properties": {
+                        "extensionType": EXTENSION_TYPE_SSC,
+                        "provisioningState": "Failed",
+                    }
+                },
+            },
+            raises=ExceptionMeta(
+                exc_type=ValidationError,
+                exc_msg=[
+                    "Foundational service(s) with non-successful provisioning state detected on the cluster:\n\n",
+                    EXTENSION_TYPE_SSC,
+                    EXTENSION_TYPE_PLATFORM,
+                    "\n\nInstance deployment will not continue. Please run 'az iot ops init'.",
+                ],
+            ),
+            omit_http_methods=frozenset([responses.PUT, responses.POST]),
+        ),
+        build_target_scenario(
+            cluster_name=generate_random_string(),
+            resource_group_name=generate_random_string(),
+            omit_extension_types=frozenset([EXTENSION_TYPE_PLATFORM]),
+            raises=ExceptionMeta(
+                exc_type=ValidationError,
+                exc_msg=(
+                    "Foundational service(s) not detected on the cluster:\n\n"
+                    f"{EXTENSION_TYPE_PLATFORM}"
+                    "\n\nInstance deployment will not continue. Please run 'az iot ops init'."
+                ),
+            ),
+            omit_http_methods=frozenset([responses.PUT, responses.POST]),
+        ),
     ],
 )
 def test_iot_ops_create(
@@ -426,6 +557,12 @@ def test_iot_ops_create(
         create_call_kwargs["instance_description"] = target_scenario["instance"]["description"]
     if target_scenario["dataflow"]["profileInstances"]:
         create_call_kwargs["dataflow_profile_instances"] = target_scenario["dataflow"]["profileInstances"]
+
+    exc_meta: Optional[ExceptionMeta] = target_scenario.get("raises")
+    if exc_meta:
+        exc_meta: ExceptionMeta
+        assert_exception(expected_exc_meta=exc_meta, call_func=create_instance, call_kwargs=create_call_kwargs)
+        return
 
     create_result = create_instance(**create_call_kwargs)
 
