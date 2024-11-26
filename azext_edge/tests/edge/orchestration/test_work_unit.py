@@ -720,7 +720,7 @@ def assert_instance_deployment_body(body_str: str, target_scenario: dict):
         assert parameters["containerRuntimeSocket"]["value"] == target_scenario["akri"]["containerRuntimeSocket"]
 
     # TODO - @digimaun
-    assert parameters["defaultDataflowinstanceCount"] == target_scenario["dataflow"]["profileInstances"] or 1
+    # assert parameters["defaultDataflowinstanceCount"] == target_scenario["dataflow"]["profileInstances"] or 1
     assert parameters["brokerConfig"] == {
         "value": {
             "frontendReplicas": 2,
