@@ -17,7 +17,7 @@ from azext_edge.edge.providers.orchestration.resources.connector.opcua.certs imp
     OPCUA_CLIENT_CERT_SECRET_SYNC_NAME,
     OPCUA_SPC_NAME,
 )
-from azext_edge.edge.providers.orchestration.work import EXTENSION_TYPE_OPS
+from azext_edge.edge.providers.orchestration.common import EXTENSION_TYPE_OPS
 from .conftest import (
     assemble_resource_map_mock,
     generate_ssc_object_string,

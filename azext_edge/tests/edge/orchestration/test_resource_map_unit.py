@@ -13,7 +13,7 @@ import pytest
 from rich.tree import Tree
 
 from azext_edge.edge.providers.orchestration.resource_map import IoTOperationsResource
-from azext_edge.edge.providers.orchestration.work import EXTENSION_TYPE_OPS
+from azext_edge.edge.providers.orchestration.common import EXTENSION_TYPE_OPS
 
 from ...generators import generate_random_string, get_zeroed_subscription
 

@@ -10,7 +10,7 @@ from unittest.mock import Mock
 import pytest
 
 from azext_edge.edge.providers.orchestration.deletion import IoTOperationsResource
-from azext_edge.edge.providers.orchestration.work import EXTENSION_TYPE_OPS
+from azext_edge.edge.providers.orchestration.common import EXTENSION_TYPE_OPS
 from azext_edge.tests.helpers import generate_ops_resource
 
 from ...generators import generate_random_string
