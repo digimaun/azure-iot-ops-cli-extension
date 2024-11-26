@@ -16,10 +16,9 @@ from rich.live import Live
 from rich.progress import Progress, SpinnerColumn, TimeElapsedColumn
 from rich.table import Table
 
-from azext_edge.edge.providers.orchestration.work import EXTENSION_TYPE_OPS
-
 from ...util.az_client import get_resource_client, wait_for_terminal_states
 from ...util.common import should_continue_prompt
+from .common import EXTENSION_TYPE_OPS
 from .resource_map import IoTOperationsResource, IoTOperationsResourceMap
 from .resources import Instances
 
