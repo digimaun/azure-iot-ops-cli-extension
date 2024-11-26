@@ -16,7 +16,7 @@ from unittest.mock import Mock
 import pytest
 import requests
 import responses
-from azure.cli.core.azclierror import ValidationError
+from azure.cli.core.azclierror import ValidationError, InvalidArgumentValueError
 
 from azext_edge.edge.providers.base import DEFAULT_NAMESPACE
 from azext_edge.edge.providers.orchestration.common import (
@@ -37,6 +37,7 @@ from azext_edge.edge.providers.orchestration.work import (
     WorkManager,
     WorkStepKey,
 )
+from azext_edge.edge.util import assemble_nargs_to_dict
 
 from ...generators import generate_random_string, get_zeroed_subscription
 from .test_template_unit import (
@@ -282,8 +283,7 @@ def build_target_scenario(
     extensions_list = list(default_extensions_config.values())
 
     payload = {
-        "instance": {"name": generate_random_string(), "description": None, "namespace": None},
-        "customLocationName": None,
+        "instance": {"name": generate_random_string(), "description": None, "namespace": None, "tags": None},
         "enableRsyncRules": None,
         "location": None,
         "resourceGroup": resource_group_name,
@@ -297,6 +297,7 @@ def build_target_scenario(
             },
             "extensions": {"value": extensions_list},
         },
+        "customLocation": {"name": None},
         "providerNamespace": {
             "value": [{"namespace": namespace, "registrationState": "Registered"} for namespace in RP_NAMESPACE_SET]
         },
@@ -313,7 +314,10 @@ def build_target_scenario(
             "roleAssignments": {"value": []},
         },
         "dataflow": {"profileInstances": None},
-        "kubernetesDistro": None,
+        "akri": {
+            "containerRuntimeSocket": None,
+            "kubernetesDistro": None,
+        },
         "noProgress": True,
         "raises": raises,
         "omitHttpMethods": omit_http_methods,
@@ -464,6 +468,11 @@ def assert_init_deployment_body(body_str: str, target_scenario: dict):
         build_target_scenario(
             cluster_name=generate_random_string(),
             resource_group_name=generate_random_string(),
+            akri={"containerRuntimeSocket": "/var/containerd/socket", "kubernetesDistro": "K3s"},
+        ),
+        build_target_scenario(
+            cluster_name=generate_random_string(),
+            resource_group_name=generate_random_string(),
             cluster_properties={"connectivityStatus": "Disconnected"},
             raises=ExceptionMeta(
                 exc_type=ValidationError,
@@ -513,6 +522,75 @@ def assert_init_deployment_body(body_str: str, target_scenario: dict):
             ),
             omit_http_methods=frozenset([responses.PUT, responses.POST]),
         ),
+        build_target_scenario(
+            cluster_name=generate_random_string(),
+            resource_group_name=generate_random_string(),
+            extension_config_settings={
+                EXTENSION_TYPE_PLATFORM: {
+                    "properties": {
+                        "extensionType": EXTENSION_TYPE_PLATFORM,
+                        "provisioningState": PROVISIONING_STATE_SUCCESS,
+                        "configurationSettings": {"installCertManager": "false"},
+                    }
+                },
+            },
+            raises=ExceptionMeta(
+                exc_type=ValidationError,
+                exc_msg=(
+                    "Cluster was enabled with user-managed trust configuration, --trust-settings "
+                    "arguments are required to create an instance on this cluster."
+                ),
+            ),
+            omit_http_methods=frozenset([responses.PUT, responses.POST]),
+        ),
+        build_target_scenario(
+            cluster_name=generate_random_string(),
+            resource_group_name=generate_random_string(),
+            extension_config_settings={
+                EXTENSION_TYPE_PLATFORM: {
+                    "id": generate_random_string(),
+                    "properties": {
+                        "extensionType": EXTENSION_TYPE_PLATFORM,
+                        "provisioningState": PROVISIONING_STATE_SUCCESS,
+                        "configurationSettings": {"installCertManager": "false"},
+                    },
+                },
+            },
+            trust={
+                "settings": [
+                    "configMapName=example-bundle",
+                    "configMapKey=trust-bundle.pem",
+                    "issuerKind=Issuer",
+                    "issuerName=selfsigned-issuer",
+                ]
+            },
+        ),
+        build_target_scenario(
+            cluster_name=generate_random_string(),
+            resource_group_name=generate_random_string(),
+            extension_config_settings={
+                EXTENSION_TYPE_PLATFORM: {
+                    "id": generate_random_string(),
+                    "properties": {
+                        "extensionType": EXTENSION_TYPE_PLATFORM,
+                        "provisioningState": PROVISIONING_STATE_SUCCESS,
+                        "configurationSettings": {"installCertManager": "false"},
+                    },
+                },
+            },
+            trust={
+                "settings": [
+                    "configMapName=example-bundle",
+                    "configMapKey=trust-bundle.pem",
+                    "issuerKind=Issuer",
+                ]
+            },
+            raises=ExceptionMeta(
+                exc_type=InvalidArgumentValueError,
+                exc_msg="issuerName is a required trust setting/key.",
+            ),
+            omit_http_methods=frozenset([responses.PUT, responses.POST, responses.GET, responses.HEAD]),
+        ),
     ],
 )
 def test_iot_ops_create(
@@ -530,12 +608,6 @@ def test_iot_ops_create(
         "resource_group_name": target_scenario["resourceGroup"],
         "instance_name": target_scenario["instance"]["name"],
         "schema_registry_resource_id": target_scenario["schemaRegistry"]["id"],
-        "location": target_scenario["cluster"]["location"],
-        "custom_location_name": target_scenario["customLocationName"],
-        "enable_rsync_rules": target_scenario["enableRsyncRules"],
-        "trust_settings": target_scenario["trust"]["settings"],
-        # "container_runtime_socket": None,
-        # "kubernetes_distro": None,
         # "ops_config": None,
         # "ops_version": None,
         # "ops_train": None,
@@ -548,15 +620,30 @@ def test_iot_ops_create(
         # "broker_frontend_workers": int = 2,
         # "broker_frontend_replicas": int = 2,
         # "add_insecure_listener": Optional[bool] = None,
-        # "tags": Optional[dict] = None,
         "no_progress": target_scenario["noProgress"],
     }
     if target_scenario["instance"]["namespace"]:
         create_call_kwargs["cluster_namespace"] = target_scenario["instance"]["namespace"]
     if target_scenario["instance"]["description"]:
         create_call_kwargs["instance_description"] = target_scenario["instance"]["description"]
+    if target_scenario["instance"]["tags"]:
+        create_call_kwargs["tags"] = target_scenario["instance"]["tags"]
+    if target_scenario["cluster"]["location"]:
+        create_call_kwargs["location"] = target_scenario["cluster"]["location"]
+    if target_scenario["customLocation"]["name"]:
+        create_call_kwargs["custom_location_name"] = target_scenario["customLocation"]["name"]
+    if target_scenario["enableRsyncRules"] is not None:
+        create_call_kwargs["enable_rsync_rules"] = bool(target_scenario["enableRsyncRules"])
+    if target_scenario["instance"]["description"]:
+        create_call_kwargs["instance_description"] = target_scenario["instance"]["description"]
     if target_scenario["dataflow"]["profileInstances"]:
         create_call_kwargs["dataflow_profile_instances"] = target_scenario["dataflow"]["profileInstances"]
+    if target_scenario["trust"]["settings"]:
+        create_call_kwargs["trust_settings"] = target_scenario["trust"]["settings"]
+    if target_scenario["akri"]["containerRuntimeSocket"]:
+        create_call_kwargs["container_runtime_socket"] = target_scenario["akri"]["containerRuntimeSocket"]
+    if target_scenario["akri"]["kubernetesDistro"]:
+        create_call_kwargs["kubernetes_distro"] = target_scenario["akri"]["kubernetesDistro"]
 
     exc_meta: Optional[ExceptionMeta] = target_scenario.get("raises")
     if exc_meta:
@@ -605,13 +692,13 @@ def assert_instance_deployment_body(body_str: str, target_scenario: dict):
     assert parameters["schemaRegistryId"]["value"] == target_scenario["schemaRegistry"]["id"]
     assert parameters["deployResourceSyncRules"]["value"] == bool(target_scenario["enableRsyncRules"])
 
-    # Optionals
-    assert parameters["defaultDataflowinstanceCount"] == target_scenario["dataflow"]["profileInstances"] or 1
-    assert (
-        parameters["kubernetesDistro"]["value"] == target_scenario["kubernetesDistro"]
-        or KubernetesDistroType.k8s.value
-    )
+    assert parameters["kubernetesDistro"]["value"] == target_scenario["akri"]["kubernetesDistro"] or "K8s"
+
+    if target_scenario["akri"]["containerRuntimeSocket"]:
+        assert parameters["containerRuntimeSocket"]["value"] == target_scenario["akri"]["containerRuntimeSocket"]
+
     # TODO - @digimaun
+    assert parameters["defaultDataflowinstanceCount"] == target_scenario["dataflow"]["profileInstances"] or 1
     assert parameters["brokerConfig"] == {
         "value": {
             "frontendReplicas": 2,
@@ -624,9 +711,9 @@ def assert_instance_deployment_body(body_str: str, target_scenario: dict):
         }
     }
     expected_trust_config = {"source": "SelfSigned"}
-    if target_scenario["trust"]["userTrust"]:
-        # TODO - @digimaun - trust setting key validation should be handled in target unit tests
-        expected_trust_config = {"source": "CustomerManaged", "settings": target_scenario["trust"]["settings"]}
+    if target_scenario["trust"]["settings"]:
+        assembled_settings = assemble_nargs_to_dict(target_scenario["trust"]["settings"])
+        expected_trust_config = {"source": "CustomerManaged", "settings": assembled_settings}
     assert parameters["trustConfig"]["value"] == expected_trust_config
 
     mode = body["properties"]["mode"]
