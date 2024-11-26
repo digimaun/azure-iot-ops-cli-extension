@@ -8,7 +8,6 @@
 import json
 import re
 from enum import Enum
-from pathlib import Path
 from random import randint
 from typing import Callable, Dict, FrozenSet, List, NamedTuple, Optional, Type, Union
 from unittest.mock import Mock
@@ -16,8 +15,15 @@ from unittest.mock import Mock
 import pytest
 import requests
 import responses
-from azure.cli.core.azclierror import ValidationError, InvalidArgumentValueError
+from azure.cli.core.azclierror import InvalidArgumentValueError, ValidationError
 
+from azext_edge.edge.common import (
+    DEFAULT_BROKER,
+    DEFAULT_BROKER_AUTHN,
+    DEFAULT_BROKER_LISTENER,
+    DEFAULT_DATAFLOW_ENDPOINT,
+    DEFAULT_DATAFLOW_PROFILE,
+)
 from azext_edge.edge.providers.base import DEFAULT_NAMESPACE
 from azext_edge.edge.providers.orchestration.common import (
     ARM_ENDPOINT,
@@ -26,8 +32,6 @@ from azext_edge.edge.providers.orchestration.common import (
     EXTENSION_TYPE_SSC,
     OPS_EXTENSION_DEPS,
     KubernetesDistroType,
-    MqMemoryProfile,
-    MqServiceType,
 )
 from azext_edge.edge.providers.orchestration.rp_namespace import RP_NAMESPACE_SET
 from azext_edge.edge.providers.orchestration.work import (
@@ -409,13 +413,15 @@ def test_iot_ops_init(
         "cmd": mocked_cmd,
         "cluster_name": target_scenario["cluster"]["name"],
         "resource_group_name": target_scenario["resourceGroup"],
-        "no_progress": target_scenario["noProgress"],
         "ensure_latest": target_scenario["ensureLatest"],
     }
     if target_scenario["enableFaultTolerance"]:
         init_call_kwargs["enable_fault_tolerance"] = target_scenario["enableFaultTolerance"]
     if target_scenario["trust"]["userTrust"]:
         init_call_kwargs["user_trust"] = target_scenario["trust"]["userTrust"]
+
+    if target_scenario["noProgress"]:
+        init_call_kwargs["no_progress"] = target_scenario["noProgress"]
 
     exc_meta: Optional[ExceptionMeta] = target_scenario.get("raises")
     if exc_meta:
@@ -469,6 +475,13 @@ def assert_init_deployment_body(body_str: str, target_scenario: dict):
             cluster_name=generate_random_string(),
             resource_group_name=generate_random_string(),
             akri={"containerRuntimeSocket": "/var/containerd/socket", "kubernetesDistro": "K3s"},
+            instance={
+                "name": generate_random_string(),
+                "description": generate_random_string(),
+                "namespace": generate_random_string(),
+                "tags": {generate_random_string(): generate_random_string()},
+            },
+            dataflow={"profileInstances": randint(1, 10)},
         ),
         build_target_scenario(
             cluster_name=generate_random_string(),
@@ -608,19 +621,6 @@ def test_iot_ops_create(
         "resource_group_name": target_scenario["resourceGroup"],
         "instance_name": target_scenario["instance"]["name"],
         "schema_registry_resource_id": target_scenario["schemaRegistry"]["id"],
-        # "ops_config": None,
-        # "ops_version": None,
-        # "ops_train": None,
-        # "custom_broker_config_file": None,
-        # "broker_memory_profile": str = MqMemoryProfile.medium.value,
-        # "broker_service_type": str = MqServiceType.cluster_ip.value,
-        # "broker_backend_partitions": int = 2,
-        # "broker_backend_workers": int = 2,
-        # "broker_backend_redundancy_factor": int = 2,
-        # "broker_frontend_workers": int = 2,
-        # "broker_frontend_replicas": int = 2,
-        # "add_insecure_listener": Optional[bool] = None,
-        "no_progress": target_scenario["noProgress"],
     }
     if target_scenario["instance"]["namespace"]:
         create_call_kwargs["cluster_namespace"] = target_scenario["instance"]["namespace"]
@@ -644,6 +644,9 @@ def test_iot_ops_create(
         create_call_kwargs["container_runtime_socket"] = target_scenario["akri"]["containerRuntimeSocket"]
     if target_scenario["akri"]["kubernetesDistro"]:
         create_call_kwargs["kubernetes_distro"] = target_scenario["akri"]["kubernetesDistro"]
+
+    if target_scenario["noProgress"]:
+        create_call_kwargs["no_progress"] = target_scenario["noProgress"]
 
     exc_meta: Optional[ExceptionMeta] = target_scenario.get("raises")
     if exc_meta:
@@ -673,13 +676,29 @@ def test_iot_ops_create(
 def assert_instance_deployment_body(body_str: str, target_scenario: dict):
     assert body_str
     body = json.loads(body_str)
+    resources = body["properties"]["template"]["resources"]
     parameters = body["properties"]["parameters"]
     assert parameters["clusterName"]["value"] == target_scenario["cluster"]["name"]
-
     assert parameters["clusterNamespace"]["value"] == target_scenario["instance"]["namespace"] or DEFAULT_NAMESPACE
     assert (
         parameters["clusterLocation"]["value"] == target_scenario["location"] or target_scenario["cluster"]["location"]
     )
+
+    instance_name: str = target_scenario["instance"]["name"]
+    instance_name_lowered = instance_name.lower()
+    assert resources["aioInstance"]["name"] == instance_name_lowered
+    assert resources["broker"]["name"] == f"{instance_name_lowered}/{DEFAULT_BROKER}"
+    assert resources["broker_authn"]["name"] == f"{instance_name_lowered}/{DEFAULT_BROKER}/{DEFAULT_BROKER_AUTHN}"
+    assert (
+        resources["broker_listener"]["name"] == f"{instance_name_lowered}/{DEFAULT_BROKER}/{DEFAULT_BROKER_LISTENER}"
+    )
+    assert resources["dataflow_profile"]["name"] == f"{instance_name_lowered}/{DEFAULT_DATAFLOW_PROFILE}"
+    assert resources["dataflow_endpoint"]["name"] == f"{instance_name_lowered}/{DEFAULT_DATAFLOW_ENDPOINT}"
+
+    if target_scenario["instance"]["description"]:
+        assert resources["aioInstance"]["properties"]["description"] == target_scenario["instance"]["description"]
+    if target_scenario["instance"]["tags"]:
+        assert resources["aioInstance"]["tags"] == target_scenario["instance"]["tags"]
 
     cl_extension_ids = set(
         [
@@ -692,7 +711,10 @@ def assert_instance_deployment_body(body_str: str, target_scenario: dict):
     assert parameters["schemaRegistryId"]["value"] == target_scenario["schemaRegistry"]["id"]
     assert parameters["deployResourceSyncRules"]["value"] == bool(target_scenario["enableRsyncRules"])
 
-    assert parameters["kubernetesDistro"]["value"] == target_scenario["akri"]["kubernetesDistro"] or "K8s"
+    assert (
+        parameters["kubernetesDistro"]["value"] == target_scenario["akri"]["kubernetesDistro"]
+        or KubernetesDistroType.k8s.value
+    )
 
     if target_scenario["akri"]["containerRuntimeSocket"]:
         assert parameters["containerRuntimeSocket"]["value"] == target_scenario["akri"]["containerRuntimeSocket"]

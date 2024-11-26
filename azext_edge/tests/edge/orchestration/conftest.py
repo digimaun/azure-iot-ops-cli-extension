@@ -14,9 +14,35 @@ from ...generators import generate_random_string
 MOCK_BROKER_CONFIG_PATH = Path(__file__).parent.joinpath("./broker_config.json")
 
 
+# Not used
+@pytest.fixture
+def mocked_verify_write_permission_against_rg(mocker):
+    patched = mocker.patch(
+        "azext_edge.edge.providers.orchestration.permissions.verify_write_permission_against_rg", autospec=True
+    )
+    yield patched
+
+
 @pytest.fixture
 def mocked_permission_manager(mocker):
     patched = mocker.patch("azext_edge.edge.providers.orchestration.work.PermissionManager", autospec=True)
+    yield patched
+
+
+@pytest.fixture
+def mocked_verify_custom_locations_enabled(mocker):
+    patched = mocker.patch(
+        "azext_edge.edge.providers.orchestration.base.verify_custom_locations_enabled", autospec=True
+    )
+    yield patched
+
+
+##
+
+
+@pytest.fixture
+def mocked_resource_graph(mocker):
+    patched = mocker.patch("azext_edge.edge.providers.orchestration.connected_cluster.ResourceGraph", autospec=True)
     yield patched
 
 
@@ -27,30 +53,8 @@ def mocked_get_resource_client(mocker):
 
 
 @pytest.fixture
-def mocked_verify_cli_client_connections(mocker):
-    patched = mocker.patch("azext_edge.edge.providers.orchestration.host.verify_cli_client_connections", autospec=True)
-    yield patched
-
-
-@pytest.fixture
-def mocked_verify_write_permission_against_rg(mocker):
-    patched = mocker.patch(
-        "azext_edge.edge.providers.orchestration.permissions.verify_write_permission_against_rg", autospec=True
-    )
-    yield patched
-
-
-@pytest.fixture
 def mocked_wait_for_terminal_state(mocker):
     patched = mocker.patch("azext_edge.edge.providers.orchestration.work.wait_for_terminal_state", autospec=True)
-    yield patched
-
-
-@pytest.fixture
-def mocked_verify_custom_locations_enabled(mocker):
-    patched = mocker.patch(
-        "azext_edge.edge.providers.orchestration.base.verify_custom_locations_enabled", autospec=True
-    )
     yield patched
 
 
