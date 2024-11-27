@@ -401,7 +401,7 @@ class WorkManager:
                 )
                 # Pattern needs work, it is this way to dynamically update UI
                 self._display.categories[WorkCategoryKey.ENABLE_IOT_OPS][0].title = (
-                    f"[link={self.get_deployment_link(enablement_work_name)}]"
+                    f"[link={self._get_deployment_link(enablement_work_name)}]"
                     f"{self._display.categories[WorkCategoryKey.ENABLE_IOT_OPS][0].title}[/link]"
                 )
                 self._render_display(category=WorkCategoryKey.ENABLE_IOT_OPS)
@@ -446,7 +446,7 @@ class WorkManager:
                 )
                 # Pattern needs work, it is this way to dynamically update UI
                 self._display.categories[WorkCategoryKey.DEPLOY_IOT_OPS][0].title = (
-                    f"[link={self.get_deployment_link(instance_work_name)}]"
+                    f"[link={self._get_deployment_link(instance_work_name)}]"
                     f"{self._display.categories[WorkCategoryKey.DEPLOY_IOT_OPS][0].title}[/link]"
                 )
                 self._render_display(category=WorkCategoryKey.DEPLOY_IOT_OPS)
@@ -595,7 +595,7 @@ class WorkManager:
         # TODO @digimaun - work kpis
         return self._result_payload
 
-    def get_deployment_link(self, deployment_name: str) -> str:
+    def _get_deployment_link(self, deployment_name: str) -> str:
         return (
             "https://portal.azure.com/#blade/HubsExtension/DeploymentDetailsBlade/id/"
             f"%2Fsubscriptions%2F{self.subscription_id}%2FresourceGroups%2F{self._targets.resource_group_name}"
