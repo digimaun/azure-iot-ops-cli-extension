@@ -446,6 +446,15 @@ def test_iot_ops_init(
 def assert_init_deployment_body(body_str: str, target_scenario: dict):
     assert body_str
     body = json.loads(body_str)
+
+    mode = body["properties"]["mode"]
+    assert mode == "Incremental"
+
+    template = body["properties"]["template"]
+    for key in EXPECTED_EXTENSION_RESOURCE_KEYS:
+        assert template["resources"][key]
+    assert len(template["resources"]) == len(EXPECTED_EXTENSION_RESOURCE_KEYS)
+
     parameters = body["properties"]["parameters"]
     assert parameters["clusterName"]["value"] == target_scenario["cluster"]["name"]
 
@@ -458,13 +467,6 @@ def assert_init_deployment_body(body_str: str, target_scenario: dict):
     if target_scenario["enableFaultTolerance"]:
         expected_advanced_config["edgeStorageAccelerator"] = {"faultToleranceEnabled": True}
     assert parameters["advancedConfig"]["value"] == expected_advanced_config
-
-    mode = body["properties"]["mode"]
-    assert mode == "Incremental"
-
-    template = body["properties"]["template"]
-    for key in EXPECTED_EXTENSION_RESOURCE_KEYS:
-        assert template["resources"][key]
 
 
 @pytest.mark.parametrize(
@@ -676,8 +678,18 @@ def test_iot_ops_create(
 def assert_instance_deployment_body(body_str: str, target_scenario: dict):
     assert body_str
     body = json.loads(body_str)
-    resources = body["properties"]["template"]["resources"]
+
+    mode = body["properties"]["mode"]
+    assert mode == "Incremental"
+
+    template = body["properties"]["template"]
+    for key in EXPECTED_INSTANCE_RESOURCE_KEYS:
+        assert template["resources"][key]
+    assert len(template["resources"]) == len(EXPECTED_INSTANCE_RESOURCE_KEYS)
+
+    resources = template["resources"]
     parameters = body["properties"]["parameters"]
+
     assert parameters["clusterName"]["value"] == target_scenario["cluster"]["name"]
     assert parameters["clusterNamespace"]["value"] == target_scenario["instance"]["namespace"] or DEFAULT_NAMESPACE
     assert (
@@ -737,13 +749,6 @@ def assert_instance_deployment_body(body_str: str, target_scenario: dict):
         assembled_settings = assemble_nargs_to_dict(target_scenario["trust"]["settings"])
         expected_trust_config = {"source": "CustomerManaged", "settings": assembled_settings}
     assert parameters["trustConfig"]["value"] == expected_trust_config
-
-    mode = body["properties"]["mode"]
-    assert mode == "Incremental"
-
-    template = body["properties"]["template"]
-    for key in EXPECTED_INSTANCE_RESOURCE_KEYS:
-        assert template["resources"][key]
 
 
 # def _assert_displays_for(work_category_set: FrozenSet[WorkCategoryKey], display_spys: Dict[str, Mock]):
