@@ -138,11 +138,13 @@ class WorkManager:
         version_map = self._targets.get_extension_versions(False)
         display_desc = "[dim]"
         for moniker in version_map:
-            display_desc += f"• {version_map[moniker]['version']} {version_map[moniker]['train']}\n"
+            display_desc += f"v{version_map[moniker]['version']} {version_map[moniker]['train']}\n"
         return display_desc[:-1]
 
     def _format_instance_config_desc(self) -> str:
-        instance_config = {"resource sync": "enabled" if self._targets.deploy_resource_sync_rules else "disabled"}
+        instance_config = {
+            "resource sync": "enabled" if self._targets.deploy_resource_sync_rules else "disabled"
+        }
         display_desc = ""
         for c in instance_config:
             display_desc += f"• {c}: {instance_config[c]}\n"

@@ -34,6 +34,7 @@ def get_trust_settings():
         for key in TRUST_SETTING_KEYS
     ]
 
+
 def get_schema_registry_id():
     return get_resource_id(
         resource_path="/schemaRegistries/myregistry",
@@ -69,16 +70,14 @@ INSTANCE_PARAM_CONVERSION_MAP = {
 @pytest.mark.parametrize(
     "target_scenario",
     [
-        build_target_scenario(
-            cluster_name=generate_random_string(),
-            resource_group_name=generate_random_string()
-        ),
+        build_target_scenario(cluster_name=generate_random_string(), resource_group_name=generate_random_string()),
         build_target_scenario(
             cluster_name=generate_random_string(),
             resource_group_name=generate_random_string(),
             schema_registry_resource_id=get_schema_registry_id(),
             location=generate_random_string(),
             instance_name=generate_random_string(),
+            custom_broker_config={generate_random_string(): generate_random_string()},
         ),
         build_target_scenario(
             cluster_name=generate_random_string(),
@@ -90,6 +89,7 @@ INSTANCE_PARAM_CONVERSION_MAP = {
             cluster_name=generate_random_string(),
             resource_group_name=generate_random_string(),
             schema_registry_resource_id=get_schema_registry_id(),
+            cluster_namespace=generate_random_string(),
             location=generate_random_string(),
             custom_location_name=generate_random_string(),
             enable_rsync_rules=True,
@@ -100,7 +100,6 @@ INSTANCE_PARAM_CONVERSION_MAP = {
             ops_config=[f"{generate_random_string()}={generate_random_string()}"],
             ops_version=generate_random_string(),
             ops_train=generate_random_string(),
-            trust_settings=get_trust_settings(),
             dataflow_profile_instances=randint(1, 10),
             broker_memory_profile=generate_random_string(),
             broker_service_type=generate_random_string(),
@@ -112,7 +111,7 @@ INSTANCE_PARAM_CONVERSION_MAP = {
             add_insecure_listener=True,
             kubernetes_distro=generate_random_string(),
             container_runtime_socket=generate_random_string(),
-            custom_broker_config={generate_random_string(): generate_random_string()},
+            trust_settings=get_trust_settings(),
         ),
     ],
 )
@@ -139,10 +138,9 @@ def test_init_targets(target_scenario: dict):
 
     enablement_template, enablement_parameters = targets.get_ops_enablement_template()
     verify_trust_config(
-        targets=targets,
         target_scenario=target_scenario,
-        template=enablement_template,
         parameters=enablement_parameters,
+        template=enablement_template,
     )
 
     for parameter in enablement_parameters:
@@ -157,7 +155,10 @@ def test_init_targets(target_scenario: dict):
 
     instance_template, instance_parameters = targets.get_ops_instance_template(extension_ids)
     verify_trust_config(
-        targets=targets,
+        target_scenario=target_scenario,
+        parameters=instance_parameters,
+    )
+    verify_broker_config(
         target_scenario=target_scenario,
         parameters=instance_parameters,
     )
@@ -211,9 +212,21 @@ def test_init_targets(target_scenario: dict):
         )
 
 
-def verify_trust_config(
-    targets: InitTargets, target_scenario: dict, template: Optional[dict] = None, parameters: Optional[dict] = None
-):
+def verify_broker_config(target_scenario: dict, parameters):
+    for target_pair in [
+        ("broker_frontend_replicas", "frontendReplicas"),
+        ("broker_frontend_workers", "frontendWorkers"),
+        ("broker_backend_redundancy_factor", "backendRedundancyFactor"),
+        ("broker_backend_workers", "backendWorkers"),
+        ("broker_backend_partitions", "backendPartitions"),
+        ("broker_memory_profile", "memoryProfile"),
+        ("broker_service_type", "serviceType"),
+    ]:
+        if target_pair[0] in target_scenario:
+            assert parameters["brokerConfig"]["value"][target_pair[1]] == target_scenario[target_pair[0]]
+
+
+def verify_trust_config(target_scenario: dict, parameters: dict, template: Optional[dict] = None):
     user_trust = target_scenario.get("user_trust")
     trust_settings = target_scenario.get("trust_settings")
 
@@ -233,6 +246,5 @@ def verify_trust_config(
             "configMapName": trust_settings["configMapName"],
         }
 
-    assert targets.trust_config == expected_payload
     if parameters:
         assert parameters["trustConfig"]["value"] == expected_payload
