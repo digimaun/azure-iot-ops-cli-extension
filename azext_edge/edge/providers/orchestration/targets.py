@@ -48,7 +48,6 @@ class InitTargets:
         ops_config: Optional[List[str]] = None,
         ops_version: Optional[str] = None,
         ops_train: Optional[str] = None,
-        trust_settings: Optional[List[str]] = None,
         # Dataflow
         dataflow_profile_instances: int = 1,
         # Broker
@@ -66,6 +65,7 @@ class InitTargets:
         container_runtime_socket: Optional[str] = None,
         # User Trust Config
         user_trust: Optional[bool] = None,
+        trust_settings: Optional[List[str]] = None,
         **_,
     ):
         self.cluster_name = cluster_name
@@ -85,10 +85,10 @@ class InitTargets:
         self.ops_config = assemble_nargs_to_dict(ops_config)
         self.ops_version = ops_version
         self.ops_train = ops_train
+        self.user_trust = user_trust
         self.trust_settings = assemble_nargs_to_dict(trust_settings)
         self.trust_config = self.get_trust_settings_target_map()
         self.advanced_config = self.get_advanced_config_target_map()
-        self.user_trust = user_trust
 
         # Dataflow
         self.dataflow_profile_instances = self._sanitize_int(dataflow_profile_instances)
@@ -162,8 +162,6 @@ class InitTargets:
             template_blueprint=TEMPLATE_BLUEPRINT_ENABLEMENT,
         )
         if self.user_trust:
-            # disable cert and trust manager
-            parameters["trustConfig"]["value"]["source"] = "CustomerManaged"
             # patch enablement template expecting full trust settings for source: CustomerManaged
             template.get_type_definition("_1.CustomerManaged")["properties"]["settings"]["nullable"] = True
         return template.content, parameters
@@ -172,8 +170,6 @@ class InitTargets:
         self,
         cl_extension_ids: List[str],
     ) -> Tuple[dict, dict]:
-        self.trust_config = self.get_trust_settings_target_map()
-
         template, parameters = self._handle_apply_targets(
             param_to_target={
                 "clusterName": self.cluster_name,
@@ -288,10 +284,11 @@ class InitTargets:
 
     def get_trust_settings_target_map(self) -> dict:
         source = "SelfSigned"
+        if self.trust_settings or self.user_trust:
+            source = "CustomerManaged"
         result = {"source": source}
         if self.trust_settings:
             target_settings: Dict[str, str] = {}
-            result["source"] = "CustomerManaged"
             trust_bundle_def = TEMPLATE_BLUEPRINT_ENABLEMENT.get_type_definition("_1.TrustBundleSettings")[
                 "properties"
             ]

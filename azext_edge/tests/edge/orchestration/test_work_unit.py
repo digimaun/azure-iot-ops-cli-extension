@@ -413,7 +413,6 @@ def test_iot_ops_init(
         "cmd": mocked_cmd,
         "cluster_name": target_scenario["cluster"]["name"],
         "resource_group_name": target_scenario["resourceGroup"],
-        "ensure_latest": target_scenario["ensureLatest"],
     }
     if target_scenario["enableFaultTolerance"]:
         init_call_kwargs["enable_fault_tolerance"] = target_scenario["enableFaultTolerance"]
@@ -422,6 +421,8 @@ def test_iot_ops_init(
 
     if target_scenario["noProgress"]:
         init_call_kwargs["no_progress"] = target_scenario["noProgress"]
+    if target_scenario["ensureLatest"]:
+        init_call_kwargs["ensure_latest"] = target_scenario["ensureLatest"]
 
     exc_meta: Optional[ExceptionMeta] = target_scenario.get("raises")
     if exc_meta:

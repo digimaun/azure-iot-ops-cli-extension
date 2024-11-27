@@ -4,6 +4,7 @@
 # Licensed under the MIT License. See License file in the project root for license information.
 # ----------------------------------------------------------------------------------------------
 from random import randint
+from typing import Optional
 
 import pytest
 
@@ -33,6 +34,13 @@ def get_trust_settings():
         for key in TRUST_SETTING_KEYS
     ]
 
+def get_schema_registry_id():
+    return get_resource_id(
+        resource_path="/schemaRegistries/myregistry",
+        resource_group_name=generate_random_string(),
+        resource_provider="Microsoft.DeviceRegistry",
+    )
+
 
 K8S_NAME_KEYS = frozenset(["cluster_namespace", "custom_location_name", "instance_name"])
 KEY_CONVERSION_MAP = {"enable_rsync_rules": "deploy_resource_sync_rules"}
@@ -61,26 +69,27 @@ INSTANCE_PARAM_CONVERSION_MAP = {
 @pytest.mark.parametrize(
     "target_scenario",
     [
-        build_target_scenario(cluster_name=generate_random_string(), resource_group_name=generate_random_string()),
+        build_target_scenario(
+            cluster_name=generate_random_string(),
+            resource_group_name=generate_random_string()
+        ),
         build_target_scenario(
             cluster_name=generate_random_string(),
             resource_group_name=generate_random_string(),
-            schema_registry_resource_id=get_resource_id(
-                resource_path="/schemaRegistries/myregistry",
-                resource_group_name=generate_random_string(),
-                resource_provider="Microsoft.DeviceRegistry",
-            ),
+            schema_registry_resource_id=get_schema_registry_id(),
             location=generate_random_string(),
             instance_name=generate_random_string(),
         ),
         build_target_scenario(
             cluster_name=generate_random_string(),
             resource_group_name=generate_random_string(),
-            schema_registry_resource_id=get_resource_id(
-                resource_path="/schemaRegistries/myregistry",
-                resource_group_name=generate_random_string(),
-                resource_provider="Microsoft.DeviceRegistry",
-            ),
+            schema_registry_resource_id=get_schema_registry_id(),
+            user_trust=True,
+        ),
+        build_target_scenario(
+            cluster_name=generate_random_string(),
+            resource_group_name=generate_random_string(),
+            schema_registry_resource_id=get_schema_registry_id(),
             location=generate_random_string(),
             custom_location_name=generate_random_string(),
             enable_rsync_rules=True,
@@ -105,16 +114,6 @@ INSTANCE_PARAM_CONVERSION_MAP = {
             container_runtime_socket=generate_random_string(),
             custom_broker_config={generate_random_string(): generate_random_string()},
         ),
-        build_target_scenario(
-            cluster_name=generate_random_string(),
-            resource_group_name=generate_random_string(),
-            schema_registry_resource_id=get_resource_id(
-                resource_path="/schemaRegistries/myregistry",
-                resource_group_name=generate_random_string(),
-                resource_provider="Microsoft.DeviceRegistry",
-            ),
-            user_trust=True,
-        ),
     ],
 )
 def test_init_targets(target_scenario: dict):
@@ -138,11 +137,13 @@ def test_init_targets(target_scenario: dict):
     if target_scenario.get("enable_fault_tolerance"):
         assert targets.advanced_config == {"edgeStorageAccelerator": {"faultToleranceEnabled": True}}
 
-    verify_user_trust_settings(targets, target_scenario)
-
     enablement_template, enablement_parameters = targets.get_ops_enablement_template()
-
-    verify_user_trust_enablement(targets, enablement_template, target_scenario)
+    verify_trust_config(
+        targets=targets,
+        target_scenario=target_scenario,
+        template=enablement_template,
+        parameters=enablement_parameters,
+    )
 
     for parameter in enablement_parameters:
         targets_key = parameter
@@ -153,11 +154,13 @@ def test_init_targets(target_scenario: dict):
         ), f"{parameter} value mismatch with targets {targets_key} value."
 
     extension_ids = [generate_random_string(), generate_random_string()]
-    target_scenario_has_user_trust = target_scenario.get("trust_settings")
-    if target_scenario_has_user_trust:
-        targets.trust_config = None
 
     instance_template, instance_parameters = targets.get_ops_instance_template(extension_ids)
+    verify_trust_config(
+        targets=targets,
+        target_scenario=target_scenario,
+        parameters=instance_parameters,
+    )
 
     if targets.ops_version:
         assert instance_template["variables"]["VERSIONS"]["iotOperations"] == targets.ops_version
@@ -207,30 +210,29 @@ def test_init_targets(target_scenario: dict):
             targets.instance_name, "default"
         )
 
-    verify_user_trust_settings(targets, target_scenario)
 
+def verify_trust_config(
+    targets: InitTargets, target_scenario: dict, template: Optional[dict] = None, parameters: Optional[dict] = None
+):
+    user_trust = target_scenario.get("user_trust")
+    trust_settings = target_scenario.get("trust_settings")
 
-def verify_user_trust_settings(targets: InitTargets, target_scenario: dict):
-    target_scenario_has_user_trust = target_scenario.get("trust_settings")
-    if not target_scenario_has_user_trust:
-        assert targets.trust_config == {"source": "SelfSigned"}
-        return
+    expected_payload = {"source": "SelfSigned"}
+    if user_trust:
+        expected_payload["source"] = "CustomerManaged"
+        if template:
+            # TODO @c-ryan-k - Enablement template should not require "settings" for customer managed trust config
+            assert template["definitions"]["_1.CustomerManaged"]["properties"]["settings"]["nullable"]
 
-    assert targets.trust_config == {
-        "source": "CustomerManaged",
-        "settings": {
-            "issuerKind": target_scenario["trust_settings"]["issuerKind"],
-            "configMapKey": target_scenario["trust_settings"]["configMapKey"],
-            "issuerName": target_scenario["trust_settings"]["issuerName"],
-            "configMapName": target_scenario["trust_settings"]["configMapName"],
-        },
-    }
+    if trust_settings:
+        expected_payload["source"] = "CustomerManaged"
+        expected_payload["settings"] = {
+            "issuerKind": trust_settings["issuerKind"],
+            "configMapKey": trust_settings["configMapKey"],
+            "issuerName": trust_settings["issuerName"],
+            "configMapName": trust_settings["configMapName"],
+        }
 
-
-def verify_user_trust_enablement(targets: InitTargets, enablement_template: dict, target_scenario: dict):
-    if target_scenario.get("user_trust"):
-        assert targets.trust_config["source"] == "CustomerManaged"
-        # TODO @c-ryan-k - Enablement template should not require "settings" for customer managed trust config
-        assert enablement_template["definitions"]["_1.CustomerManaged"]["properties"]["settings"]["nullable"]
-    elif not target_scenario.get("trust_settings"):
-        assert targets.trust_config["source"] == "SelfSigned"
+    assert targets.trust_config == expected_payload
+    if parameters:
+        assert parameters["trustConfig"]["value"] == expected_payload
