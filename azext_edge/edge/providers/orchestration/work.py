@@ -87,8 +87,10 @@ class WorkDisplay:
         self._steps: Dict[int, Dict[int, str]] = {}
         self._headers: Dict[int, str] = {}
 
-    def add_category(self, category: WorkCategoryKey, title: str, skipped: bool = False):
-        self._categories[category] = (WorkRecord(title), skipped)
+    def add_category(
+        self, category: WorkCategoryKey, title: str, skipped: bool = False, description: Optional[str] = None
+    ):
+        self._categories[category] = (WorkRecord(title, description), skipped)
         self._steps[category] = {}
 
     def add_step(self, category: WorkCategoryKey, step: WorkStepKey, title: str, description: Optional[str] = None):
@@ -128,16 +130,23 @@ class WorkManager:
     def _format_enablement_desc(self) -> str:
         version_map = self._targets.get_extension_versions()
         display_desc = "[dim]"
-        for ver in version_map:
-            display_desc += f"• {ver}: {version_map[ver]}\n"
-        return display_desc[:-1] + ""
+        for moniker in version_map:
+            display_desc += f"• {moniker}: {version_map[moniker]['version']} {version_map[moniker]['train']}\n"
+        return display_desc[:-1]
 
     def _format_instance_desc(self) -> str:
+        version_map = self._targets.get_extension_versions(False)
+        display_desc = "[dim]"
+        for moniker in version_map:
+            display_desc += f"• {version_map[moniker]['version']} {version_map[moniker]['train']}\n"
+        return display_desc[:-1]
+
+    def _format_instance_config_desc(self) -> str:
         instance_config = {"resource sync": "enabled" if self._targets.deploy_resource_sync_rules else "disabled"}
         display_desc = ""
         for c in instance_config:
             display_desc += f"• {c}: {instance_config[c]}\n"
-        return display_desc[:-1] + ""
+        return display_desc[:-1]
 
     def _build_display(self):
         pre_check_cat_desc = "Pre-Flight"
@@ -160,13 +169,15 @@ class WorkManager:
             )
 
         if self._targets.instance_name:
-            self._display.add_category(WorkCategoryKey.DEPLOY_IOT_OPS, "Deploy IoT Operations")
+            self._display.add_category(
+                WorkCategoryKey.DEPLOY_IOT_OPS, "Deploy IoT Operations", False, self._format_instance_desc()
+            )
             self._display.add_step(WorkCategoryKey.DEPLOY_IOT_OPS, WorkStepKey.WHAT_IF_INSTANCE, "What-If evaluation")
             self._display.add_step(
                 WorkCategoryKey.DEPLOY_IOT_OPS,
                 WorkStepKey.DEPLOY_INSTANCE,
                 f"Create instance [cyan]{self._targets.instance_name}",
-                self._format_instance_desc(),
+                self._format_instance_config_desc(),
             )
 
     def _process_connected_cluster(self):
@@ -494,6 +505,14 @@ class WorkManager:
                     f"{self._display.categories[c][0].title} "
                     f"{'[[dark_khaki]skipped[/dark_khaki]]' if self._display.categories[c][1] else ''}",
                 )
+                if self._display.categories[c][0].description:
+                    content_grid.add_row(
+                        "",
+                        Padding(
+                            self._display.categories[c][0].description,
+                            (0, 0, 0, 4),
+                        ),
+                    )
                 if c in self._display.steps:
                     for s in self._display.steps[c]:
                         if s in self._completed_steps:

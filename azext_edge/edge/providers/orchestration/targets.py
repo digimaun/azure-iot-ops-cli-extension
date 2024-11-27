@@ -5,6 +5,7 @@
 # ----------------------------------------------------------------------------------------------
 
 from typing import Dict, List, Optional, Tuple
+from functools import partial
 
 from azure.cli.core.azclierror import InvalidArgumentValueError
 
@@ -135,9 +136,19 @@ class InitTargets:
 
         return template_copy, deploy_params
 
-    def get_extension_versions(self) -> dict:
-        # Don't need a deep copy here.
-        return TEMPLATE_BLUEPRINT_ENABLEMENT.content["variables"]["VERSIONS"].copy()
+    def get_extension_versions(self, for_enablement: bool = True) -> dict:
+        version_map = {}
+        get_template_method = self.get_ops_enablement_template
+        if not for_enablement:
+            get_template_method = partial(self.get_ops_instance_template, cl_extension_ids=[])
+        template, _ = get_template_method()
+        template_vars = template["variables"]
+        for moniker in template_vars["VERSIONS"]:
+            version_map[moniker] = {"version": template_vars["VERSIONS"][moniker]}
+        for moniker in template_vars["TRAINS"]:
+            version_map[moniker]["train"] = template_vars["TRAINS"][moniker]
+
+        return version_map
 
     def get_ops_enablement_template(
         self,
