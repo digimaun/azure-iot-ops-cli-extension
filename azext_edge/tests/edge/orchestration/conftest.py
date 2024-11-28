@@ -82,3 +82,19 @@ def mock_broker_config():
 def mocked_sleep(mocker):
     patched = mocker.patch("azext_edge.edge.util.az_client.sleep", autospec=True)
     yield patched
+
+
+@pytest.fixture
+def spy_work_displays(mocker):
+    from azext_edge.edge.providers.orchestration.work import WorkManager
+
+    yield {
+        "render_display": mocker.spy(WorkManager, "_render_display"),
+        "complete_step": mocker.spy(WorkManager, "_complete_step"),
+    }
+
+
+@pytest.fixture
+def mocked_logger(mocker):
+    patched = mocker.patch("azext_edge.edge.providers.orchestration.work.logger", autospec=True)
+    yield patched

@@ -9,13 +9,13 @@ import json
 import re
 from enum import Enum
 from random import randint
-from typing import Callable, Dict, FrozenSet, List, NamedTuple, Optional, Type, Union
+from typing import Callable, Dict, FrozenSet, List, NamedTuple, Optional, Tuple, Type, Union
 from unittest.mock import Mock
 
 import pytest
 import requests
 import responses
-from azure.cli.core.azclierror import InvalidArgumentValueError, ValidationError
+from azure.cli.core.azclierror import InvalidArgumentValueError, ValidationError, AzureResponseError
 
 from azext_edge.edge.common import (
     DEFAULT_BROKER,
@@ -37,9 +37,6 @@ from azext_edge.edge.providers.orchestration.rp_namespace import RP_NAMESPACE_SE
 from azext_edge.edge.providers.orchestration.work import (
     CONNECTIVITY_STATUS_CONNECTED,
     PROVISIONING_STATE_SUCCESS,
-    WorkCategoryKey,
-    WorkManager,
-    WorkStepKey,
 )
 from azext_edge.edge.util import assemble_nargs_to_dict
 
@@ -156,7 +153,8 @@ class ServiceGenerator:
                 assert f"/resourcegroups/{self.scenario['resourceGroup']}/" in request_kpis.path_url
                 assert_init_deployment_body(body_str=request_kpis.body_str, target_scenario=self.scenario)
                 self.call_map[CallKey.DEPLOY_INIT_WHATIF].append(request_kpis)
-                return (200, STANDARD_HEADERS, json.dumps(self.scenario["whatIf"]))
+                api_control = self.scenario["apiControl"][CallKey.DEPLOY_INIT_WHATIF]
+                return (api_control["code"], STANDARD_HEADERS, json.dumps(api_control["body"]))
 
         if request_kpis.method == responses.PUT:
             if re.match(
@@ -209,7 +207,8 @@ class ServiceGenerator:
                 assert f"/resourcegroups/{self.scenario['resourceGroup']}/" in request_kpis.path_url
                 assert_instance_deployment_body(body_str=request_kpis.body_str, target_scenario=self.scenario)
                 self.call_map[CallKey.DEPLOY_CREATE_WHATIF].append(request_kpis)
-                return (200, STANDARD_HEADERS, json.dumps(self.scenario["whatIf"]))
+                api_response = self.scenario["apiControl"][CallKey.DEPLOY_CREATE_WHATIF]
+                return (api_response["code"], STANDARD_HEADERS, json.dumps(api_response["body"]))
 
         if request_kpis.method == responses.PUT:
             if re.match(
@@ -230,7 +229,9 @@ class ServiceGenerator:
                 ops_ext_identity = self._get_extension_identity()
                 assert request_kpis.params["api-version"] == "2022-04-01"
                 self.call_map[CallKey.PUT_SCHEMA_REGISTRY_RA].append(request_kpis)
-                return (200, STANDARD_HEADERS, json.dumps({}))
+                api_control = self.scenario["apiControl"][CallKey.PUT_SCHEMA_REGISTRY_RA]
+
+                return (api_control["code"], STANDARD_HEADERS, json.dumps(api_control["body"]))
 
     def _get_extension_identity(self, extension_type: str = EXTENSION_TYPE_OPS) -> Optional[dict]:
         for ext in self.scenario["cluster"]["extensions"]["value"]:
@@ -249,8 +250,6 @@ def get_request_kpis(request: requests.PreparedRequest):
 
 
 def build_target_scenario(
-    cluster_name: str,
-    resource_group_name: str,
     extension_config_settings: Optional[dict] = None,
     omit_extension_types: Optional[FrozenSet[str]] = None,
     omit_http_methods: Optional[FrozenSet[str]] = None,
@@ -258,6 +257,7 @@ def build_target_scenario(
     **kwargs,
 ) -> dict:
     schema_registry_name: str = generate_random_string()
+    resource_group_name = generate_random_string()
 
     expected_extension_types: List[str] = list(OPS_EXTENSION_DEPS)
     expected_extension_types.append(EXTENSION_TYPE_OPS)
@@ -292,7 +292,7 @@ def build_target_scenario(
         "location": None,
         "resourceGroup": resource_group_name,
         "cluster": {
-            "name": cluster_name,
+            "name": generate_random_string(),
             "location": generate_random_string(),
             "properties": {
                 "provisioningState": PROVISIONING_STATE_SUCCESS,
@@ -305,7 +305,6 @@ def build_target_scenario(
         "providerNamespace": {
             "value": [{"namespace": namespace, "registrationState": "Registered"} for namespace in RP_NAMESPACE_SET]
         },
-        "whatIf": {"status": PROVISIONING_STATE_SUCCESS},
         "trust": {"userTrust": None, "settings": None},
         "enableFaultTolerance": None,
         "ensureLatest": None,
@@ -325,10 +324,19 @@ def build_target_scenario(
         "noProgress": True,
         "raises": raises,
         "omitHttpMethods": omit_http_methods,
+        "apiControl": {
+            CallKey.DEPLOY_INIT_WHATIF: {"code": 200, "body": {"status": PROVISIONING_STATE_SUCCESS}},
+            CallKey.DEPLOY_CREATE_WHATIF: {"code": 200, "body": {"status": PROVISIONING_STATE_SUCCESS}},
+            CallKey.PUT_SCHEMA_REGISTRY_RA: {"code": 200, "body": {}},
+        },
     }
     if "cluster_properties" in kwargs:
         payload["cluster"]["properties"].update(kwargs["cluster_properties"])
         kwargs.pop("cluster_properties")
+    if "apiControl" in kwargs:
+        for k in kwargs["apiControl"]:
+            payload["apiControl"][k] = kwargs["apiControl"][k]
+        kwargs.pop("apiControl")
 
     payload.update(**kwargs)
     return payload
@@ -358,28 +366,20 @@ def assert_exception(expected_exc_meta: ExceptionMeta, call_func: Callable, call
 @pytest.mark.parametrize(
     "target_scenario",
     [
-        build_target_scenario(cluster_name=generate_random_string(), resource_group_name=generate_random_string()),
+        build_target_scenario(),
         build_target_scenario(
-            cluster_name=generate_random_string(),
-            resource_group_name=generate_random_string(),
             cluster_properties={"totalNodeCount": 3},
             enableFaultTolerance=True,
         ),
         build_target_scenario(
-            cluster_name=generate_random_string(),
-            resource_group_name=generate_random_string(),
             trust={"userTrust": True},
         ),
         build_target_scenario(
-            cluster_name=generate_random_string(),
-            resource_group_name=generate_random_string(),
             cluster_properties={"totalNodeCount": 3},
             enableFaultTolerance=True,
             trust={"userTrust": True},
         ),
         build_target_scenario(
-            cluster_name=generate_random_string(),
-            resource_group_name=generate_random_string(),
             cluster_properties={"connectivityStatus": "Disconnected"},
             raises=ExceptionMeta(
                 exc_type=ValidationError,
@@ -388,8 +388,6 @@ def assert_exception(expected_exc_meta: ExceptionMeta, call_func: Callable, call
             omit_http_methods=frozenset([responses.PUT, responses.POST]),
         ),
         build_target_scenario(
-            cluster_name=generate_random_string(),
-            resource_group_name=generate_random_string(),
             cluster_properties={"totalNodeCount": 1},
             enableFaultTolerance=True,
             raises=ExceptionMeta(
@@ -398,12 +396,21 @@ def assert_exception(expected_exc_meta: ExceptionMeta, call_func: Callable, call
             ),
             omit_http_methods=frozenset([responses.PUT, responses.POST]),
         ),
+        build_target_scenario(
+            apiControl={CallKey.DEPLOY_INIT_WHATIF: {"code": 200, "body": {"status": "Failed"}}},
+            raises=ExceptionMeta(
+                exc_type=AzureResponseError,
+                exc_msg=json.dumps({"status": "Failed"}, indent=2),
+            ),
+            omit_http_methods=frozenset([responses.PUT]),
+        ),
     ],
 )
 def test_iot_ops_init(
     mocked_cmd: Mock,
     mocked_responses: responses,
     mocked_sleep: Mock,
+    spy_work_displays: Dict[str, Mock],
     target_scenario: dict,
 ):
     servgen = ServiceGenerator(scenario=target_scenario, mocked_responses=mocked_responses)
@@ -439,9 +446,15 @@ def test_iot_ops_init(
         CallKey.DEPLOY_INIT: 1,
     }
     assert_call_map(expected_call_count_map, servgen.call_map)
+    assert_init_displays(spy_work_displays, target_scenario)
 
     if target_scenario["noProgress"]:
         assert init_result is not None  # TODO - @digimaun
+
+
+def assert_init_displays(spy_work_displays: Dict[str, Mock], target_scenario: dict):
+    # TODO
+    pass
 
 
 def assert_init_deployment_body(body_str: str, target_scenario: dict):
@@ -473,10 +486,8 @@ def assert_init_deployment_body(body_str: str, target_scenario: dict):
 @pytest.mark.parametrize(
     "target_scenario",
     [
-        build_target_scenario(cluster_name=generate_random_string(), resource_group_name=generate_random_string()),
+        build_target_scenario(),
         build_target_scenario(
-            cluster_name=generate_random_string(),
-            resource_group_name=generate_random_string(),
             akri={"containerRuntimeSocket": "/var/containerd/socket", "kubernetesDistro": "K3s"},
             instance={
                 "name": generate_random_string(),
@@ -487,8 +498,6 @@ def assert_init_deployment_body(body_str: str, target_scenario: dict):
             dataflow={"profileInstances": randint(1, 10)},
         ),
         build_target_scenario(
-            cluster_name=generate_random_string(),
-            resource_group_name=generate_random_string(),
             cluster_properties={"connectivityStatus": "Disconnected"},
             raises=ExceptionMeta(
                 exc_type=ValidationError,
@@ -497,8 +506,6 @@ def assert_init_deployment_body(body_str: str, target_scenario: dict):
             omit_http_methods=frozenset([responses.PUT, responses.POST]),
         ),
         build_target_scenario(
-            cluster_name=generate_random_string(),
-            resource_group_name=generate_random_string(),
             extension_config_settings={
                 EXTENSION_TYPE_PLATFORM: {
                     "properties": {
@@ -525,8 +532,6 @@ def assert_init_deployment_body(body_str: str, target_scenario: dict):
             omit_http_methods=frozenset([responses.PUT, responses.POST]),
         ),
         build_target_scenario(
-            cluster_name=generate_random_string(),
-            resource_group_name=generate_random_string(),
             omit_extension_types=frozenset([EXTENSION_TYPE_PLATFORM]),
             raises=ExceptionMeta(
                 exc_type=ValidationError,
@@ -539,8 +544,6 @@ def assert_init_deployment_body(body_str: str, target_scenario: dict):
             omit_http_methods=frozenset([responses.PUT, responses.POST]),
         ),
         build_target_scenario(
-            cluster_name=generate_random_string(),
-            resource_group_name=generate_random_string(),
             extension_config_settings={
                 EXTENSION_TYPE_PLATFORM: {
                     "properties": {
@@ -560,8 +563,6 @@ def assert_init_deployment_body(body_str: str, target_scenario: dict):
             omit_http_methods=frozenset([responses.PUT, responses.POST]),
         ),
         build_target_scenario(
-            cluster_name=generate_random_string(),
-            resource_group_name=generate_random_string(),
             extension_config_settings={
                 EXTENSION_TYPE_PLATFORM: {
                     "id": generate_random_string(),
@@ -582,8 +583,6 @@ def assert_init_deployment_body(body_str: str, target_scenario: dict):
             },
         ),
         build_target_scenario(
-            cluster_name=generate_random_string(),
-            resource_group_name=generate_random_string(),
             extension_config_settings={
                 EXTENSION_TYPE_PLATFORM: {
                     "id": generate_random_string(),
@@ -607,12 +606,18 @@ def assert_init_deployment_body(body_str: str, target_scenario: dict):
             ),
             omit_http_methods=frozenset([responses.PUT, responses.POST, responses.GET, responses.HEAD]),
         ),
+        build_target_scenario(
+            apiControl={CallKey.PUT_SCHEMA_REGISTRY_RA: {"code": 400, "body": {"status": "Failed"}}},
+            warnings=[(0, "Role assignment failed with:\nOperation returned an invalid status 'Bad Request'")],
+        ),
     ],
 )
 def test_iot_ops_create(
     mocked_cmd: Mock,
     mocked_responses: responses,
     mocked_sleep: Mock,
+    spy_work_displays: Dict[str, Mock],
+    mocked_logger: Mock,
     target_scenario: dict,
 ):
     servgen = ServiceGenerator(scenario=target_scenario, mocked_responses=mocked_responses)
@@ -671,9 +676,23 @@ def test_iot_ops_create(
         CallKey.DEPLOY_CREATE: 1,
     }
     assert_call_map(expected_call_count_map, servgen.call_map)
+    assert_create_displays(spy_work_displays, target_scenario)
+    assert_logger(mocked_logger, target_scenario)
 
     if target_scenario["noProgress"]:
         assert create_result is not None  # @digimaun
+
+
+def assert_logger(mocked_logger: Mock, target_scenario: dict):
+    expeted_warnings: List[Tuple[int, str]] = target_scenario.get("warnings", [])
+    warning_calls: List[Mock] = mocked_logger.warning.mock_calls
+    for w in expeted_warnings:
+        assert w[1] in warning_calls[w[0]].args[0]
+
+
+def assert_create_displays(spy_work_displays: Dict[str, Mock], target_scenario: dict):
+    # TODO
+    pass
 
 
 def assert_instance_deployment_body(body_str: str, target_scenario: dict):
@@ -732,8 +751,10 @@ def assert_instance_deployment_body(body_str: str, target_scenario: dict):
     if target_scenario["akri"]["containerRuntimeSocket"]:
         assert parameters["containerRuntimeSocket"]["value"] == target_scenario["akri"]["containerRuntimeSocket"]
 
-    # TODO - @digimaun
-    # assert parameters["defaultDataflowinstanceCount"] == target_scenario["dataflow"]["profileInstances"] or 1
+    expected_profile_instances = target_scenario.get("dataflow", {}).get("profileInstances") or 1
+    assert parameters["defaultDataflowinstanceCount"]["value"] == expected_profile_instances
+
+    # @digimaun - this asserts defaults. brokerConfig should be primary tested in targets unit tests.
     assert parameters["brokerConfig"] == {
         "value": {
             "frontendReplicas": 2,
@@ -750,28 +771,3 @@ def assert_instance_deployment_body(body_str: str, target_scenario: dict):
         assembled_settings = assemble_nargs_to_dict(target_scenario["trust"]["settings"])
         expected_trust_config = {"source": "CustomerManaged", "settings": assembled_settings}
     assert parameters["trustConfig"]["value"] == expected_trust_config
-
-
-# def _assert_displays_for(work_category_set: FrozenSet[WorkCategoryKey], display_spys: Dict[str, Mock]):
-#     render_display = display_spys["render_display"]
-#     render_display_call_kwargs = [m.kwargs for m in render_display.mock_calls]
-
-#     index = 0
-#     if WorkCategoryKey.PRE_FLIGHT in work_category_set:
-#         assert render_display_call_kwargs[index] == {
-#             "category": WorkCategoryKey.PRE_FLIGHT,
-#             "active_step": WorkStepKey.REG_RP,
-#         }
-#         index += 1
-#         assert render_display_call_kwargs[index] == {"active_step": WorkStepKey.ENUMERATE_PRE_FLIGHT}
-#         index += 1
-#         assert render_display_call_kwargs[index] == {"active_step": WorkStepKey.WHAT_IF}
-#         index += 1
-#         assert render_display_call_kwargs[index] == {"active_step": -1}
-#         index += 1
-
-#     if WorkCategoryKey.DEPLOY_AIO in work_category_set:
-#         assert render_display_call_kwargs[index] == {"category": WorkCategoryKey.DEPLOY_AIO}
-#         index += 1
-#         # DEPLOY_AIO gets rendered twice to dynamically expose deployment link
-#         assert render_display_call_kwargs[index] == {"category": WorkCategoryKey.DEPLOY_AIO}

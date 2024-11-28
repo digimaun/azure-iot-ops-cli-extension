@@ -142,9 +142,7 @@ class WorkManager:
         return display_desc[:-1]
 
     def _format_instance_config_desc(self) -> str:
-        instance_config = {
-            "resource sync": "enabled" if self._targets.deploy_resource_sync_rules else "disabled"
-        }
+        instance_config = {"resource sync": "enabled" if self._targets.deploy_resource_sync_rules else "disabled"}
         display_desc = ""
         for c in instance_config:
             display_desc += f"• {c}: {instance_config[c]}\n"

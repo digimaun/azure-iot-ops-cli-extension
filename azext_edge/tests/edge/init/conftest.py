@@ -68,22 +68,3 @@ def mocked_verify_custom_location_namespace(mocker):
         "azext_edge.edge.providers.orchestration.base.verify_custom_location_namespace", autospec=True
     )
     yield patched
-
-
-@pytest.fixture
-def spy_get_current_template_copy(mocker):
-    from azext_edge.edge.providers.orchestration import work
-
-    spy = mocker.spy(work, "get_current_template_copy")
-
-    yield spy
-
-
-@pytest.fixture
-def spy_work_displays(mocker):
-    from azext_edge.edge.providers.orchestration.work import WorkManager
-
-    yield {
-        "render_display": mocker.spy(WorkManager, "render_display"),
-        "complete_step": mocker.spy(WorkManager, "complete_step"),
-    }
