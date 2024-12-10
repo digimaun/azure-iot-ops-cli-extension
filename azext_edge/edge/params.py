@@ -1128,16 +1128,10 @@ def load_iotops_arguments(self, _):
             help="Schema registry name.",
         )
         context.argument(
-            "schema_format",
-            options_list=["--format"],
-            help="Schema format.",
-            arg_type=get_enum_type(SchemaFormat)
+            "schema_format", options_list=["--format"], help="Schema format.", arg_type=get_enum_type(SchemaFormat)
         )
         context.argument(
-            "schema_type",
-            options_list=["--type"],
-            help="Schema type.",
-            arg_type=get_enum_type(SchemaType)
+            "schema_type", options_list=["--type"], help="Schema type.", arg_type=get_enum_type(SchemaType)
         )
         context.argument(
             "description",
@@ -1154,19 +1148,19 @@ def load_iotops_arguments(self, _):
             options_list=["--version", "--ver"],
             help="Schema version name.",
             type=int,
-            arg_group="Version"
+            arg_group="Version",
         )
         context.argument(
             "schema_version_content",
             options_list=["--version-content", "--vc"],
             help="File path containing or inline content for the version.",
-            arg_group="Version"
+            arg_group="Version",
         )
         context.argument(
             "schema_version_description",
             options_list=["--version-desc", "--vd"],
             help="Description for the version.",
-            arg_group="Version"
+            arg_group="Version",
         )
 
     with self.argument_context("iot ops schema show-dataflow-refs") as context:
@@ -1180,7 +1174,7 @@ def load_iotops_arguments(self, _):
             options_list=["--version", "--ver"],
             help="Schema version name. If used, --latest will be ignored.",
             type=int,
-            arg_group=None
+            arg_group=None,
         )
         context.argument(
             "latest",
@@ -1251,6 +1245,30 @@ def load_iotops_arguments(self, _):
             options_list=["--resource-group", "-g"],
             help="Instance resource group.",
         )
+        context.argument(
+            "include_secrets",
+            options_list=["--include-secrets"],
+            help="Indicates the command should remove the key vault secrets "
+            "associated with the certificate(s). This option will delete and "
+            "purge the secrets.",
+            arg_type=get_three_state_flag(),
+        )
+        context.argument(
+            "certificate_names",
+            options_list=["--certificate-names", "--cn"],
+            nargs="+",
+            help="Space-separated certificate names to remove. "
+            "Note: the names can be found under the corresponding "
+            "secretsync resource property 'targetKey'.",
+        )
+        context.argument(
+            "overwrite_secret",
+            options_list=["--overwrite-secret"],
+            arg_type=get_three_state_flag(),
+            help="Confirm [y]es without a prompt to overwrite secret. "
+            "if secret name existed in Azure key vault. Useful for "
+            "CI and automation scenarios.",
+        )
 
     with self.argument_context("iot ops connector opcua trust") as context:
         context.argument(
@@ -1260,7 +1278,7 @@ def load_iotops_arguments(self, _):
         )
         context.argument(
             "secret_name",
-            options_list=["--secret", "-s"],
+            options_list=["--secret-name", "-s"],
             help="Secret name in the Key Vault. If not provided, the "
             "certificate file name will be used to generate the secret name.",
         )
@@ -1296,33 +1314,30 @@ def load_iotops_arguments(self, _):
         context.argument(
             "subject_name",
             options_list=["--subject-name", "--sn"],
-            help="The subject name string embedded in the application instance certificate.",
+            help="The subject name string embedded in the application instance certificate."
+            "Can be found under public key certificate.",
         )
         context.argument(
             "application_uri",
             options_list=["--application-uri", "--au"],
-            help="The application instance URI embedded in the application instance.",
+            help="The application instance URI embedded in the application instance."
+            "Can be found under public key certificate.",
         )
         context.argument(
             "public_key_secret_name",
-            options_list=["--public-key-secret", "--pks"],
+            options_list=["--public-key-secret-name", "--pks"],
             help="Public key secret name in the Key Vault. If not provided, the "
             "certificate file name will be used to generate the secret name.",
         )
         context.argument(
             "private_key_secret_name",
-            options_list=["--private-key-secret", "--prks"],
+            options_list=["--private-key-secret-name", "--prks"],
             help="Private key secret name in the Key Vault. If not provided, the "
             "certificate file name will be used to generate the secret name.",
         )
 
     with self.argument_context("iot ops schema version") as context:
-        context.argument(
-            "version_name",
-            options_list=["--name", "-n"],
-            help="Schema version name.",
-            type=int
-        )
+        context.argument("version_name", options_list=["--name", "-n"], help="Schema version name.", type=int)
         context.argument(
             "schema_name",
             options_list=["--schema"],
@@ -1337,5 +1352,5 @@ def load_iotops_arguments(self, _):
             "schema_version_content",
             options_list=["--content"],
             help="File path containing or inline content for the version.",
-            arg_group=None
+            arg_group=None,
         )

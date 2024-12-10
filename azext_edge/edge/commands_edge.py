@@ -114,84 +114,18 @@ def init(
     no_pre_flight = is_env_flag_enabled(INIT_NO_PREFLIGHT_ENV_KEY)
 
     work_manager = WorkManager(cmd)
-    return work_manager.execute_ops_init(
+    result_payload = work_manager.execute_ops_init(
         show_progress=not no_progress,
         pre_flight=not no_pre_flight,
         cluster_name=cluster_name,
         resource_group_name=resource_group_name,
         enable_fault_tolerance=enable_fault_tolerance,
         user_trust=user_trust,
-    )
-
-
-def upgrade(
-    cmd,
-    resource_group_name: str,
-    instance_name: str,
-    no_progress: Optional[bool] = None,
-    confirm_yes: Optional[bool] = None,
-    **kwargs,
-):
-    from .providers.orchestration.upgrade import upgrade_ops_resources
-
-    return upgrade_ops_resources(
-        cmd=cmd,
-        resource_group_name=resource_group_name,
-        instance_name=instance_name,
-        no_progress=no_progress,
-        confirm_yes=confirm_yes,
         **kwargs,
     )
-
-
-def upgrade2(
-    cmd,
-    resource_group_name: str,
-    instance_name: str,
-    no_progress: Optional[bool] = None,
-    confirm_yes: Optional[bool] = None,
-    ops_config: Optional[List[str]] = None,
-    ops_version: Optional[str] = None,
-    ops_train: Optional[str] = None,
-    acs_config: Optional[List[str]] = None,
-    acs_version: Optional[str] = None,
-    acs_train: Optional[str] = None,
-    osm_config: Optional[List[str]] = None,
-    osm_version: Optional[str] = None,
-    osm_train: Optional[str] = None,
-    ssc_config: Optional[List[str]] = None,
-    ssc_version: Optional[str] = None,
-    ssc_train: Optional[str] = None,
-    plt_config: Optional[List[str]] = None,
-    plt_version: Optional[str] = None,
-    plt_train: Optional[str] = None,
-    **kwargs,
-):
-    from .providers.orchestration.upgrade2 import upgrade_ops_resources
-
-    return upgrade_ops_resources(
-        cmd=cmd,
-        resource_group_name=resource_group_name,
-        instance_name=instance_name,
-        no_progress=no_progress,
-        confirm_yes=confirm_yes,
-        ops_config=ops_config,
-        ops_version=ops_version,
-        ops_train=ops_train,
-        acs_config=acs_config,
-        acs_version=acs_version,
-        acs_train=acs_train,
-        osm_config=osm_config,
-        osm_version=osm_version,
-        osm_train=osm_train,
-        ssc_config=ssc_config,
-        ssc_version=ssc_version,
-        ssc_train=ssc_train,
-        plt_config=plt_config,
-        plt_version=plt_version,
-        plt_train=plt_train,
-        **kwargs,
-    )
+    if no_progress and result_payload:
+        # @digimaun - TODO
+        pass
 
 
 def create_instance(
@@ -247,7 +181,7 @@ def create_instance(
         )
 
     work_manager = WorkManager(cmd)
-    return work_manager.execute_ops_init(
+    result_payload = work_manager.execute_ops_init(
         show_progress=not no_progress,
         pre_flight=not no_pre_flight,
         apply_foundation=False,
@@ -279,6 +213,60 @@ def create_instance(
         broker_frontend_workers=broker_frontend_workers,
         broker_frontend_replicas=broker_frontend_replicas,
         tags=tags,
+        **kwargs,
+    )
+    if no_progress and result_payload:
+        # @digimaun - TODO
+        pass
+
+
+def upgrade2(
+    cmd,
+    resource_group_name: str,
+    instance_name: str,
+    no_progress: Optional[bool] = None,
+    confirm_yes: Optional[bool] = None,
+    ops_config: Optional[List[str]] = None,
+    ops_version: Optional[str] = None,
+    ops_train: Optional[str] = None,
+    acs_config: Optional[List[str]] = None,
+    acs_version: Optional[str] = None,
+    acs_train: Optional[str] = None,
+    osm_config: Optional[List[str]] = None,
+    osm_version: Optional[str] = None,
+    osm_train: Optional[str] = None,
+    ssc_config: Optional[List[str]] = None,
+    ssc_version: Optional[str] = None,
+    ssc_train: Optional[str] = None,
+    plt_config: Optional[List[str]] = None,
+    plt_version: Optional[str] = None,
+    plt_train: Optional[str] = None,
+    **kwargs,
+):
+    from .providers.orchestration.upgrade2 import upgrade_ops_resources
+
+    return upgrade_ops_resources(
+        cmd=cmd,
+        resource_group_name=resource_group_name,
+        instance_name=instance_name,
+        no_progress=no_progress,
+        confirm_yes=confirm_yes,
+        ops_config=ops_config,
+        ops_version=ops_version,
+        ops_train=ops_train,
+        acs_config=acs_config,
+        acs_version=acs_version,
+        acs_train=acs_train,
+        osm_config=osm_config,
+        osm_version=osm_version,
+        osm_train=osm_train,
+        ssc_config=ssc_config,
+        ssc_version=ssc_version,
+        ssc_train=ssc_train,
+        plt_config=plt_config,
+        plt_version=plt_version,
+        plt_train=plt_train,
+        **kwargs,
     )
 
 
