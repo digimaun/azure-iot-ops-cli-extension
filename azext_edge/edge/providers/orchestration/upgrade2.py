@@ -218,7 +218,7 @@ class ExtensionUpgradeState:
     def __init__(self, extension: dict, desired_version_map: dict, override: Optional[ConfigOverride] = None):
         self.extension = extension
         self.desired_version_map = desired_version_map
-        self.override = override
+        self.override = override or ConfigOverride()
 
     @property
     def current_version(self) -> Tuple[str, str]:
@@ -226,18 +226,9 @@ class ExtensionUpgradeState:
 
     @property
     def desired_version(self) -> Tuple[str, str]:
-        override_version = None
-        override_train = None
-
-        if self.override:
-            if self.override.version:
-                override_version = self.override.version
-            if self.override.train:
-                override_train = self.override.train
-
         return (
-            override_version or self.desired_version_map.get("version"),
-            override_train or self.desired_version_map.get("train"),
+            self.override.version or self.desired_version_map.get("version"),
+            self.override.train or self.desired_version_map.get("train"),
         )
 
     @property
@@ -247,12 +238,9 @@ class ExtensionUpgradeState:
     def can_upgrade(self) -> bool:
         return any(
             [
-                (
-                    self.desired_version[0]
-                    and version.parse(self.desired_version[0]) > version.parse(self.current_version[0])
-                ),
-                (self.desired_version[1] and self.desired_version[1].lower() != self.current_version[1].lower()),
-                self.override,
+                self._has_delta_in_version(),
+                self._has_delta_in_train(),
+                self._has_delta_in_config(),
             ]
         )
 
@@ -261,13 +249,30 @@ class ExtensionUpgradeState:
             return {}
 
         payload = {
-            "properties": {"releaseTrain": self.desired_version[1], "version": self.desired_version[0]},
+            "properties": {},
         }
-        if self.override:
-            if self.override.config:
-                payload["properties"]["configurationSettings"] = self.override.config
+
+        if self._has_delta_in_version():
+            payload["properties"]["version"] = self.desired_version[0]
+        if self._has_delta_in_train():
+            payload["properties"]["releaseTrain"] = self.desired_version[1]
+        if self._has_delta_in_config():
+            payload["properties"]["configurationSettings"] = self.override.config
 
         return payload
+
+    def _has_delta_in_version(self) -> bool:
+        return bool(self.override.version) or (
+            self.desired_version[0] and version.parse(self.desired_version[0]) > version.parse(self.current_version[0])
+        )
+
+    def _has_delta_in_train(self) -> bool:
+        return bool(self.override.train) or (
+            self.desired_version[1] and self.desired_version[1].lower() != self.current_version[1].lower()
+        )
+
+    def _has_delta_in_config(self) -> bool:
+        return bool(self.override.config)
 
 
 def get_default_table() -> Table:
