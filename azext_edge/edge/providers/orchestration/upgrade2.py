@@ -111,13 +111,16 @@ class UpgradeManager:
         # TODO - @digimaun
         return_payload = []
         for ext in upgradeable_extensions:
+            if not ext.can_upgrade():
+                continue
             print(f"Start {ext.moniker}")
-            updated = self.resource_map.connected_cluster.clusters.extensions.update_cluster_extension(
-                resource_group_name=self.resource_group_name,
-                cluster_name=self.resource_map.connected_cluster.cluster_name,
-                extension_name=ext.extension["name"],
-                update_payload=ext.get_patch(),
-            )
+            # updated = self.resource_map.connected_cluster.clusters.extensions.update_cluster_extension(
+            #     resource_group_name=self.resource_group_name,
+            #     cluster_name=self.resource_map.connected_cluster.cluster_name,
+            #     extension_name=ext.extension["name"],
+            #     update_payload=ext.get_patch(),
+            # )
+            updated = {"moniker": ext.moniker}
             print(f"Finish {ext.moniker}")
             return_payload.append(updated)
 
@@ -127,11 +130,17 @@ class UpgradeManager:
 def render_upgrade_table(upgrade_state: "ClusterUpgradeState"):
     table = get_default_table()
     for ext in upgrade_state.extension_upgrades:
+        patch_payload = ext.get_patch()
+        if not patch_payload:
+            patch_payload = "N/A"
+        else:
+            patch_payload = JSON(dumps(patch_payload))
+
         table.add_row(
             f"{ext.moniker}",
             f"{ext.current_version[0]} \[{ext.current_version[1]}]",
             f"{ext.desired_version[0]} \[{ext.desired_version[1]}]",
-            JSON(dumps(ext.get_patch())),
+            patch_payload,
         )
         table.add_section()
 
@@ -187,7 +196,7 @@ class ClusterUpgradeState:
                 return True
 
         return False
-        #return any(ext_state.can_upgrade() for ext_state in self.extension_upgrades)
+        # return any(ext_state.can_upgrade() for ext_state in self.extension_upgrades)
 
     def refresh_upgrade_state(self) -> List["ExtensionUpgradeState"]:
         ext_queue: List["ExtensionUpgradeState"] = []
@@ -248,6 +257,9 @@ class ExtensionUpgradeState:
         )
 
     def get_patch(self) -> dict:
+        if not self.can_upgrade():
+            return {}
+
         payload = {
             "properties": {"releaseTrain": self.desired_version[1], "version": self.desired_version[0]},
         }
