@@ -14,11 +14,11 @@ from knack.log import get_logger
 from packaging import version
 from rich.console import Console
 from rich.json import JSON
-from rich.progress import Progress, SpinnerColumn, TimeElapsedColumn
+from rich.progress import Progress, SpinnerColumn, TimeElapsedColumn, TextColumn, BarColumn
 from rich.table import Table, box
 
 from .common import EXTENSION_TYPE_TO_MONIKER_MAP, EXTENSION_MONIKER_TO_ALIAS_MAP
-from ...util import assemble_nargs_to_dict
+from ...util import parse_kvp_nargs
 from ...util.common import should_continue_prompt
 from .resources import Instances
 from .targets import InitTargets
@@ -43,18 +43,10 @@ def upgrade_ops(
         cmd=cmd,
         instance_name=instance_name,
         resource_group_name=resource_group_name,
+        no_progress=no_progress,
     )
 
-    with Progress(
-        SpinnerColumn("star"),
-        *Progress.get_default_columns(),
-        "Elapsed:",
-        TimeElapsedColumn(),
-        transient=True,
-        disable=bool(no_progress),
-    ) as progress:
-        _ = progress.add_task("Analyzing cluster...", total=None)
-        upgrade_state = upgrade_manager.analyze_cluster(**kwargs)
+    upgrade_state = upgrade_manager.analyze_cluster(**kwargs)
 
     if not no_progress:
         render_upgrade_table(upgrade_state)
@@ -67,7 +59,7 @@ def upgrade_ops(
         logger.warning("Nothing to upgrade :)")
         return
 
-    return upgrade_manager.apply_upgrades(upgrade_state.extension_upgrades)
+    return upgrade_manager.apply_upgrades(upgrade_state)
 
 
 class UpgradeManager:
@@ -76,10 +68,12 @@ class UpgradeManager:
         cmd,
         resource_group_name: str,
         instance_name: str,
+        no_progress: Optional[bool] = None,
     ):
         self.cmd = cmd
         self.instance_name = instance_name
         self.resource_group_name = resource_group_name
+        self.no_progress = no_progress
         self.instances = Instances(self.cmd)
         self.resource_map = self.instances.get_resource_map(
             self.instances.show(name=self.instance_name, resource_group_name=self.resource_group_name)
@@ -95,36 +89,52 @@ class UpgradeManager:
         self.init_version_map.update(self.targets.get_extension_versions(False))
 
     def analyze_cluster(self, **override_kwargs: dict) -> "ClusterUpgradeState":
-        return ClusterUpgradeState(
-            extensions_map=self.resource_map.connected_cluster.get_extensions_by_type(
-                *list(EXTENSION_TYPE_TO_MONIKER_MAP.keys())
-            ),
-            init_version_map=self.init_version_map,
-            override_map=build_override_map(**override_kwargs),
-        )
+        with Progress(
+            SpinnerColumn("star"),
+            *Progress.get_default_columns(),
+            "Elapsed:",
+            TimeElapsedColumn(),
+            transient=True,
+            disable=bool(self.no_progress),
+        ) as progress:
+            _ = progress.add_task("Analyzing cluster...", total=None)
+            return ClusterUpgradeState(
+                extensions_map=self.resource_map.connected_cluster.get_extensions_by_type(
+                    *list(EXTENSION_TYPE_TO_MONIKER_MAP.keys())
+                ),
+                init_version_map=self.init_version_map,
+                override_map=build_override_map(**override_kwargs),
+            )
 
     def apply_upgrades(
         self,
-        upgradeable_extensions: List["ExtensionUpgradeState"],
-    ) -> Optional[List[dict]]:
+        upgrade_state: "ClusterUpgradeState",
+    ) -> List[dict]:
+        with Progress(
+            SpinnerColumn("star"),
+            TextColumn("[progress.description]{task.description}"),
+            BarColumn(),
+            "Elapsed:",
+            TimeElapsedColumn(),
+            transient=False,
+            disable=bool(self.no_progress),
+        ) as progress:
+            upgradeable_extensions: List["ExtensionUpgradeState"] = [
+                ext for ext in upgrade_state.extension_upgrades if ext.can_upgrade()
+            ]
+            return_payload = []
+            upgrade_task = progress.add_task("Applying changes...", total=len(upgradeable_extensions))
+            for ext in upgradeable_extensions:
+                updated = self.resource_map.connected_cluster.clusters.extensions.update_cluster_extension(
+                    resource_group_name=self.resource_group_name,
+                    cluster_name=self.resource_map.connected_cluster.cluster_name,
+                    extension_name=ext.extension["name"],
+                    update_payload=ext.get_patch(),
+                )
+                return_payload.append(updated)
+                progress.advance(upgrade_task)
 
-        # TODO - @digimaun
-        return_payload = []
-        for ext in upgradeable_extensions:
-            if not ext.can_upgrade():
-                continue
-            print(f"Start {ext.moniker}")
-            # updated = self.resource_map.connected_cluster.clusters.extensions.update_cluster_extension(
-            #     resource_group_name=self.resource_group_name,
-            #     cluster_name=self.resource_map.connected_cluster.cluster_name,
-            #     extension_name=ext.extension["name"],
-            #     update_payload=ext.get_patch(),
-            # )
-            updated = {"moniker": ext.moniker}
-            print(f"Finish {ext.moniker}")
-            return_payload.append(updated)
-
-        return return_payload
+            return return_payload
 
 
 def render_upgrade_table(upgrade_state: "ClusterUpgradeState"):
@@ -169,7 +179,7 @@ class ConfigOverride:
         version: Optional[str] = None,
         train: Optional[str] = None,
     ):
-        self.config = assemble_nargs_to_dict(config, suppress_falsey_value_warning=True)
+        self.config = parse_kvp_nargs(config)
         self.version = version
         self.train = train
 
@@ -280,13 +290,13 @@ def get_default_table() -> Table:
         box=box.ROUNDED,
         highlight=True,
         expand=False,
-        min_width=MAX_DISPLAY_WIDTH,
         title="The Upgrade Story",
-        width=MAX_DISPLAY_WIDTH,
     )
-    table.add_column("Extension", width=14)
-    table.add_column("Current Version", width=16)
-    table.add_column("Desired Version", width=16)
+    table.add_column(
+        "Extension",
+    )
+    table.add_column("Current Version")
+    table.add_column("Desired Version")
     table.add_column("Patch Payload")
 
     return table
