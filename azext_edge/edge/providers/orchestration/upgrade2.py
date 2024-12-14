@@ -25,13 +25,10 @@ from .targets import InitTargets
 
 logger = get_logger(__name__)
 
-
-MAX_DISPLAY_WIDTH = 100
-
-DEFAULT_CONSOLE = Console(width=MAX_DISPLAY_WIDTH)
+DEFAULT_CONSOLE = Console()
 
 
-def upgrade_ops(
+def upgrade_ops_instance(
     cmd,
     resource_group_name: str,
     instance_name: str,
