@@ -200,13 +200,8 @@ class ClusterUpgradeState:
         self.override_map = override_map
         self.extension_upgrades = self.refresh_upgrade_state()
 
-    def has_upgrades(self):
-        for ext in self.extension_upgrades:
-            if ext.can_upgrade():
-                return True
-
-        return False
-        # return any(ext_state.can_upgrade() for ext_state in self.extension_upgrades)
+    def has_upgrades(self) -> bool:
+        return any(ext_state.can_upgrade() for ext_state in self.extension_upgrades)
 
     def refresh_upgrade_state(self) -> List["ExtensionUpgradeState"]:
         ext_queue: List["ExtensionUpgradeState"] = []
