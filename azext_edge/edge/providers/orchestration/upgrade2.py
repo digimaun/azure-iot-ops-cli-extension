@@ -17,7 +17,7 @@ from rich.json import JSON
 from rich.progress import Progress, SpinnerColumn, TimeElapsedColumn, TextColumn, BarColumn
 from rich.table import Table, box
 
-from .common import EXTENSION_TYPE_TO_MONIKER_MAP, EXTENSION_MONIKER_TO_ALIAS_MAP
+from .common import EXTENSION_TYPE_TO_MONIKER_MAP, EXTENSION_MONIKER_TO_ALIAS_MAP, EXTENSION_TYPE_OPS
 from ...util import parse_kvp_nargs
 from ...util.common import should_continue_prompt
 from .resources import Instances
@@ -202,6 +202,12 @@ class ClusterUpgradeState:
 
     def refresh_upgrade_state(self) -> List["ExtensionUpgradeState"]:
         ext_queue: List["ExtensionUpgradeState"] = []
+
+        # TODO @digimaun - make status check common between modules
+        if EXTENSION_TYPE_OPS not in self.extensions_map:
+            raise ValidationError(
+                "The cluster backing the instance has an invalid state. IoT Operations extension not detected. "
+            )
 
         for ext_type in EXTENSION_TYPE_TO_MONIKER_MAP:
             ext_moniker = EXTENSION_TYPE_TO_MONIKER_MAP[ext_type]

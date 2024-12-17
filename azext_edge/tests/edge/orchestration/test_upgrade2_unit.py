@@ -4,11 +4,14 @@
 # Licensed under the MIT License. See License file in the project root for license information.
 # ----------------------------------------------------------------------------------------------
 
-from typing import Dict, List, Optional, TypeVar
+from typing import Dict, List, Optional, TypeVar, NamedTuple, Tuple
 from unittest.mock import Mock
 
 import pytest
+import re
 import responses
+import requests
+import json
 from azure.cli.core.azclierror import (
     ArgumentUsageError,
     AzureResponseError,
@@ -23,6 +26,7 @@ from azext_edge.edge.providers.orchestration.common import (
     EXTENSION_TYPE_PLATFORM,
     EXTENSION_TYPE_SSC,
     EXTENSION_TYPE_TO_MONIKER_MAP,
+    EXTENSION_MONIKER_TO_ALIAS_MAP,
 )
 from azext_edge.edge.providers.orchestration.targets import InitTargets
 
@@ -31,6 +35,7 @@ from .resources.conftest import (
     BASE_URL,
     CONNECTED_CLUSTER_API_VERSION,
     CLUSTER_EXTENSIONS_API_VERSION,
+    CLUSTER_EXTENSIONS_URL_MATCH_RE,
     get_base_endpoint,
     get_mock_resource,
 )
@@ -41,6 +46,7 @@ from .resources.test_instances_unit import (
 )
 
 T = TypeVar("T", bound="UpgradeScenario")
+STANDARD_HEADERS = {"content-type": "application/json"}
 
 
 def get_mock_cluster_record(resource_group_name: str, name: str = "mycluster") -> dict:
@@ -75,6 +81,26 @@ def get_cluster_extensions_endpoint(resource_group_name: str, cluster_name: str 
     )
 
 
+@pytest.fixture
+def mocked_logger(mocker):
+    yield mocker.patch(
+        "azext_edge.edge.providers.orchestration.upgrade2.logger",
+    )
+
+
+class OverrideRequest(NamedTuple):
+    extension_type: str
+    extension_version: str
+    extension_train: str
+
+
+class ExpectedExtPatch(NamedTuple):
+    extension_type: str
+    extension_version: str
+    extension_train: str
+    settings: Optional[Dict[str, str]] = None
+
+
 class UpgradeScenario:
     def __init__(self):
         self.extensions: Dict[str, dict] = {}
@@ -82,7 +108,9 @@ class UpgradeScenario:
         self.init_version_map: Dict[str, dict] = {}
         self.init_version_map.update(self.targets.get_extension_versions())
         self.init_version_map.update(self.targets.get_extension_versions(False))
+        self.user_kwargs: Dict[str, dict] = {}
         self._build_defaults()
+        self.ext_deltas = []
 
     def _build_defaults(self):
         for ext_type in EXTENSION_TYPE_TO_MONIKER_MAP:
@@ -96,6 +124,10 @@ class UpgradeScenario:
                 "name": EXTENSION_TYPE_TO_MONIKER_MAP[ext_type],
             }
 
+    def set_user_kwargs(self: T, **kwargs):
+        self.user_kwargs.update(kwargs)
+        return self
+
     def set_extension(self: T, ext_type: str, ext_vers: Optional[str] = None, ext_train: Optional[str] = None) -> T:
         if ext_vers:
             self.extensions[ext_type]["properties"]["version"] = ext_vers
@@ -103,9 +135,14 @@ class UpgradeScenario:
             self.extensions[ext_type]["properties"]["releaseTrain"] = ext_train
         return self
 
-    def set_get_instance_mock(
+    def set_expected_ext_kpis(self: T, *ext_kpis: Tuple[str, Optional[str], Optional[str], Optional[Dict[str, str]]]):
+        for ext_kpi in ext_kpis:
+            self.expected_kpis[ext_kpi[0]] = (ext_kpi[1], ext_kpi[2], ext_kpi[3])
+
+    def set_instance_mock(
         self: T, mocked_responses: responses, instance_name: str, resource_group_name: str, status_code: int = 200
     ):
+        mocked_responses.assert_all_requests_are_fired = False
         mock_instance_record = get_mock_instance_record(name=instance_name, resource_group_name=resource_group_name)
         mocked_responses.add(
             method=responses.GET,
@@ -134,66 +171,75 @@ class UpgradeScenario:
             content_type="application/json",
         )
 
-    def get_extensions_response(self) -> List[dict]:
+        mocked_responses.add(
+            method=responses.GET,
+            url=get_cluster_extensions_endpoint(resource_group_name=resource_group_name),
+            json={"value": self.get_extensions()},
+            status=status_code,
+            content_type="application/json",
+        )
+        mocked_responses.add_callback(
+            method=responses.PATCH,
+            url=re.compile(CLUSTER_EXTENSIONS_URL_MATCH_RE),
+            callback=self.patch_extension_response,
+        )
+
+    def patch_extension_response(self, request: requests.PreparedRequest) -> Optional[tuple]:
+        return (200, STANDARD_HEADERS, request.body)
+
+    def get_extensions(self) -> List[dict]:
         return list(self.extensions.values())
-
-
-def build_target_scenario(**kwargs) -> dict:
-    scenario_payload = {}
-
-    if "ops_config" in kwargs:
-        scenario_payload["ops_config"] = kwargs["ops_config"]
-
-    # ops_config=ops_config,
-    # ops_version=ops_version,
-    # ops_train=ops_train,
-    # acs_config=acs_config,
-    # acs_version=acs_version,
-    # acs_train=acs_train,
-    # osm_config=osm_config,
-    # osm_version=osm_version,
-    # osm_train=osm_train,
-    # ssc_config=ssc_config,
-    # ssc_version=ssc_version,
-    # ssc_train=ssc_train,
-    # plat_config=plat_config,
-    # plat_version=plat_version,
-    # plat_train=plat_train,
 
 
 @pytest.mark.parametrize("no_progress", [True])
 @pytest.mark.parametrize(
-    "target_scenario",
-    [UpgradeScenario()],
+    "target_scenario,patched_ext_types",
+    [
+        (UpgradeScenario(), []),
+        (
+            UpgradeScenario().set_extension(ext_type=EXTENSION_TYPE_PLATFORM, ext_vers="1.0.0"),
+            [EXTENSION_TYPE_PLATFORM],
+        ),
+        (
+            UpgradeScenario().set_user_kwargs(ops_config=[f"{generate_random_string()}={generate_random_string()}"]),
+            [EXTENSION_TYPE_OPS],
+        ),
+    ],
 )
 def test_ops_upgrade(
     mocked_cmd: Mock,
     mocked_responses: responses,
     target_scenario: UpgradeScenario,
+    patched_ext_types: List[str],
     no_progress: bool,
+    mocked_logger: Mock,
+    mocked_sleep: Mock,
 ):
     from azext_edge.edge.commands_edge import upgrade_instance
 
     resource_group_name = generate_random_string()
     instance_name = generate_random_string()
 
-    target_scenario.set_get_instance_mock(
+    target_scenario.set_instance_mock(
         mocked_responses=mocked_responses, instance_name=instance_name, resource_group_name=resource_group_name
     )
-
     call_kwargs = {
         "cmd": mocked_cmd,
         "resource_group_name": resource_group_name,
         "instance_name": instance_name,
+        "no_progress": no_progress,
         "confirm_yes": True,
     }
-    import pdb
+    call_kwargs.update(target_scenario.user_kwargs)
 
-    pdb.set_trace()
     upgrade_result = upgrade_instance(**call_kwargs)
-    import pdb
 
-    pdb.set_trace()
+    if not patched_ext_types:
+        assert upgrade_result is None
+        mocked_logger.warning.assert_called_once_with("Nothing to upgrade :)")
+        return
+
+    import pdb; pdb.set_trace()
 
     # cmd=cmd,
     # resource_group_name=resource_group_name,
