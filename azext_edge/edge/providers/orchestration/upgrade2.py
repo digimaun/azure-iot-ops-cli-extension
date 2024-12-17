@@ -145,8 +145,8 @@ def render_upgrade_table(upgrade_state: "ClusterUpgradeState"):
 
         table.add_row(
             f"{ext.moniker}",
-            f"{ext.current_version[0]} \[{ext.current_version[1]}]",
-            f"{ext.desired_version[0]} \[{ext.desired_version[1]}]",
+            f"{ext.current_version[0]} \\[{ext.current_version[1]}]",
+            f"{ext.desired_version[0]} \\[{ext.desired_version[1]}]",
             patch_payload,
         )
         table.add_section()

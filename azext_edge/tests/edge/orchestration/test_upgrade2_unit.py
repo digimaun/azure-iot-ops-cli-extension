@@ -4,14 +4,14 @@
 # Licensed under the MIT License. See License file in the project root for license information.
 # ----------------------------------------------------------------------------------------------
 
-from typing import Dict, List, Optional, TypeVar, NamedTuple, Tuple
+import json
+import re
+from typing import Dict, List, NamedTuple, Optional, Tuple, TypeVar
 from unittest.mock import Mock
 
 import pytest
-import re
-import responses
 import requests
-import json
+import responses
 from azure.cli.core.azclierror import (
     ArgumentUsageError,
     AzureResponseError,
@@ -20,22 +20,22 @@ from azure.cli.core.azclierror import (
 from azure.core.exceptions import HttpResponseError
 
 from azext_edge.edge.providers.orchestration.common import (
+    EXTENSION_MONIKER_TO_ALIAS_MAP,
     EXTENSION_TYPE_ACS,
     EXTENSION_TYPE_OPS,
     EXTENSION_TYPE_OSM,
     EXTENSION_TYPE_PLATFORM,
     EXTENSION_TYPE_SSC,
     EXTENSION_TYPE_TO_MONIKER_MAP,
-    EXTENSION_MONIKER_TO_ALIAS_MAP,
 )
 from azext_edge.edge.providers.orchestration.targets import InitTargets
 
 from ...generators import generate_random_string, get_zeroed_subscription
 from .resources.conftest import (
     BASE_URL,
-    CONNECTED_CLUSTER_API_VERSION,
     CLUSTER_EXTENSIONS_API_VERSION,
     CLUSTER_EXTENSIONS_URL_MATCH_RE,
+    CONNECTED_CLUSTER_API_VERSION,
     get_base_endpoint,
     get_mock_resource,
 )
@@ -109,8 +109,8 @@ class UpgradeScenario:
         self.init_version_map.update(self.targets.get_extension_versions())
         self.init_version_map.update(self.targets.get_extension_versions(False))
         self.user_kwargs: Dict[str, dict] = {}
+        self.patch_record: Dict[str, dict] = {}
         self._build_defaults()
-        self.ext_deltas = []
 
     def _build_defaults(self):
         for ext_type in EXTENSION_TYPE_TO_MONIKER_MAP:
@@ -185,7 +185,14 @@ class UpgradeScenario:
         )
 
     def patch_extension_response(self, request: requests.PreparedRequest) -> Optional[tuple]:
-        return (200, STANDARD_HEADERS, request.body)
+        body = json.loads(request.body)
+        ext_moniker = request.path_url.split("?")[0].split("/")[-1]
+        for ext_type in EXTENSION_TYPE_TO_MONIKER_MAP:
+            if EXTENSION_TYPE_TO_MONIKER_MAP[ext_type] == ext_moniker:
+                body["properties"]["extensionType"] = ext_type
+                self.patch_record[ext_type] = body
+
+        return (200, STANDARD_HEADERS, json.dumps(body))
 
     def get_extensions(self) -> List[dict]:
         return list(self.extensions.values())
@@ -198,7 +205,18 @@ class UpgradeScenario:
         (UpgradeScenario(), []),
         (
             UpgradeScenario().set_extension(ext_type=EXTENSION_TYPE_PLATFORM, ext_vers="1.0.0"),
+            [],
+        ),
+        (
+            UpgradeScenario().set_extension(ext_type=EXTENSION_TYPE_PLATFORM, ext_vers="0.5.0"),
             [EXTENSION_TYPE_PLATFORM],
+        ),
+        (
+            UpgradeScenario()
+            .set_extension(ext_type=EXTENSION_TYPE_PLATFORM, ext_vers="0.5.0")
+            .set_extension(ext_type=EXTENSION_TYPE_OPS, ext_vers="0.2.0")
+            .set_extension(ext_type=EXTENSION_TYPE_OSM, ext_vers="0.3.0"),
+            [EXTENSION_TYPE_PLATFORM, EXTENSION_TYPE_OPS, EXTENSION_TYPE_OSM],
         ),
         (
             UpgradeScenario().set_user_kwargs(ops_config=[f"{generate_random_string()}={generate_random_string()}"]),
@@ -239,7 +257,21 @@ def test_ops_upgrade(
         mocked_logger.warning.assert_called_once_with("Nothing to upgrade :)")
         return
 
-    import pdb; pdb.set_trace()
+    assert_patch_order(upgrade_result)
+
+
+def assert_patch_order(upgrade_result: List[dict]):
+    order_map = {}
+    index = 0
+    for key in EXTENSION_TYPE_TO_MONIKER_MAP:
+        order_map[key] = index
+        index = index + 1
+
+    last_index = -1
+    for patched_ext in upgrade_result:
+        current_index = order_map[patched_ext["properties"]["extensionType"]]
+        assert current_index > last_index
+        last_index = current_index
 
     # cmd=cmd,
     # resource_group_name=resource_group_name,
