@@ -7,19 +7,27 @@
 from json import dumps
 from typing import Dict, List, Optional, Tuple
 
-from azure.cli.core.azclierror import (
-    ValidationError,
-)
+from azure.cli.core.azclierror import ValidationError
 from knack.log import get_logger
 from packaging import version
 from rich.console import Console
 from rich.json import JSON
-from rich.progress import Progress, SpinnerColumn, TimeElapsedColumn, TextColumn, BarColumn
+from rich.progress import (
+    BarColumn,
+    Progress,
+    SpinnerColumn,
+    TextColumn,
+    TimeElapsedColumn,
+)
 from rich.table import Table, box
 
-from .common import EXTENSION_TYPE_TO_MONIKER_MAP, EXTENSION_MONIKER_TO_ALIAS_MAP, EXTENSION_TYPE_OPS
 from ...util import parse_kvp_nargs
 from ...util.common import should_continue_prompt
+from .common import (
+    EXTENSION_MONIKER_TO_ALIAS_MAP,
+    EXTENSION_TYPE_OPS,
+    EXTENSION_TYPE_TO_MONIKER_MAP,
+)
 from .resources import Instances
 from .targets import InitTargets
 
@@ -76,8 +84,7 @@ class UpgradeManager:
             self.instances.show(name=self.instance_name, resource_group_name=self.resource_group_name)
         )
         if not self.resource_map.connected_cluster.connected:
-            pass  # TODO: digimaun
-            # raise ValidationError(f"Cluster {self.resource_map.connected_cluster.cluster_name} is not connected.")
+            raise ValidationError(f"Cluster {self.resource_map.connected_cluster.cluster_name} is not connected.")
         self.targets = InitTargets(
             cluster_name=self.resource_map.connected_cluster.cluster_name, resource_group_name=resource_group_name
         )

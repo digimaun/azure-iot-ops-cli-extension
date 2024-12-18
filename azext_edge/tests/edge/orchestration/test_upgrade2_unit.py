@@ -54,7 +54,7 @@ STANDARD_HEADERS = {"content-type": "application/json"}
 def get_mock_cluster_record(resource_group_name: str, name: str = "mycluster") -> dict:
     return get_mock_resource(
         name=name,
-        properties={},
+        properties={"connectivityStatus": "Connected"},
         resource_group_name=resource_group_name,
     )
 
