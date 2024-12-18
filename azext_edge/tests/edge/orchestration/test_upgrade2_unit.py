@@ -6,7 +6,7 @@
 
 import json
 import re
-from typing import Dict, List, Optional, TypeVar, Tuple
+from typing import Dict, List, Optional, Tuple, TypeVar
 from unittest.mock import Mock
 
 import pytest
@@ -20,6 +20,7 @@ from azure.cli.core.azclierror import (
 from azure.core.exceptions import HttpResponseError
 
 from azext_edge.edge.providers.orchestration.common import (
+    EXTENSION_ALIAS_TO_TYPE_MAP,
     EXTENSION_MONIKER_TO_ALIAS_MAP,
     EXTENSION_TYPE_ACS,
     EXTENSION_TYPE_OPS,
@@ -27,7 +28,6 @@ from azext_edge.edge.providers.orchestration.common import (
     EXTENSION_TYPE_PLATFORM,
     EXTENSION_TYPE_SSC,
     EXTENSION_TYPE_TO_MONIKER_MAP,
-    EXTENSION_ALIAS_TO_TYPE_MAP,
 )
 from azext_edge.edge.providers.orchestration.targets import InitTargets
 from azext_edge.edge.util import parse_kvp_nargs
@@ -189,7 +189,7 @@ class UpgradeScenario:
                 self.patch_record[ext_type] = response_body
                 return (status_code, STANDARD_HEADERS, json.dumps(response_body))
 
-        return (500, STANDARD_HEADERS, json.dumps({"error": "server error"}))
+        return (502, STANDARD_HEADERS, json.dumps({"error": "server error"}))
 
     def get_extensions(self) -> List[dict]:
         return list(self.extensions.values())
@@ -229,6 +229,7 @@ class UpgradeScenario:
         ),
         (
             UpgradeScenario()
+            .set_extension(ext_type=EXTENSION_TYPE_SSC, ext_vers="0.1.0")
             .set_extension(ext_type=EXTENSION_TYPE_OPS, ext_vers="0.1.0")
             .set_extension(ext_type=EXTENSION_TYPE_ACS, ext_vers="9.9.9")
             .set_user_kwargs(
@@ -236,7 +237,7 @@ class UpgradeScenario:
                 acs_version="1.1.1",
                 acs_train=generate_random_string(),
             ),
-            [EXTENSION_TYPE_ACS, EXTENSION_TYPE_OPS],
+            [EXTENSION_TYPE_ACS, EXTENSION_TYPE_OPS, EXTENSION_TYPE_SSC],
         ),
         (
             UpgradeScenario()
