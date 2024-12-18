@@ -586,8 +586,8 @@ def load_iotops_help():
         - name: Skip the confirmation prompt for instance upgrade. Useful for CI scenarios.
           text: >
             az iot ops upgrade --name myinstance -g myresourcegroup -y
-        - name: Set extension config settings that would be applied during upgrade.
-           to remove a setting provide the key with no value.
+        - name: Set extension config settings that apply should be during upgrade.
+           To remove a setting provide the key with no value.
           text: >
             az iot ops upgrade --name myinstance -g myresourcegroup --ops-config key1=value1 deletekey
         - name: Provide an explicit IoT Operations version or release train to upgrade to.

@@ -65,6 +65,10 @@ EXTENSION_ALIAS_TO_TYPE_MAP = {
 }
 
 
+class ClusterConnectStatus(Enum):
+    CONNECTED = "Connected"
+
+
 class MqMode(Enum):
     auto = "auto"
     distributed = "distributed"

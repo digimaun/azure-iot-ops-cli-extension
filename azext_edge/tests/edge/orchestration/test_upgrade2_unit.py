@@ -12,11 +12,7 @@ from unittest.mock import Mock
 import pytest
 import requests
 import responses
-from azure.cli.core.azclierror import (
-    ArgumentUsageError,
-    AzureResponseError,
-    RequiredArgumentMissingError,
-)
+from azure.cli.core.azclierror import ValidationError
 from azure.core.exceptions import HttpResponseError
 
 from azext_edge.edge.providers.orchestration.common import (
@@ -28,6 +24,7 @@ from azext_edge.edge.providers.orchestration.common import (
     EXTENSION_TYPE_PLATFORM,
     EXTENSION_TYPE_SSC,
     EXTENSION_TYPE_TO_MONIKER_MAP,
+    ClusterConnectStatus,
 )
 from azext_edge.edge.providers.orchestration.targets import InitTargets
 from azext_edge.edge.util import parse_kvp_nargs
@@ -51,10 +48,14 @@ T = TypeVar("T", bound="UpgradeScenario")
 STANDARD_HEADERS = {"content-type": "application/json"}
 
 
-def get_mock_cluster_record(resource_group_name: str, name: str = "mycluster") -> dict:
+def get_mock_cluster_record(
+    resource_group_name: str,
+    name: str = "mycluster",
+    connected_status: str = ClusterConnectStatus.CONNECTED.value,
+) -> dict:
     return get_mock_resource(
         name=name,
-        properties={"connectivityStatus": "Connected"},
+        properties={"connectivityStatus": connected_status},
         resource_group_name=resource_group_name,
     )
 
@@ -100,8 +101,9 @@ class UpgradeScenario:
         self.user_kwargs: Dict[str, dict] = {}
         self.patch_record: Dict[str, dict] = {}
         self.ext_type_response_map: Dict[str, Tuple[int, Optional[dict]]] = {}
-        self.expect_exception = False
+        self.expect_exception: Optional[Exception] = None
         self.description = description
+        self.cluster_connected_status = ClusterConnectStatus.CONNECTED.value
         self._build_defaults()
 
     def _build_defaults(self):
@@ -116,6 +118,12 @@ class UpgradeScenario:
                 "name": EXTENSION_TYPE_TO_MONIKER_MAP[ext_type],
             }
 
+    def set_cluster_connected_status(self: T, status: str) -> T:
+        self.cluster_connected_status = status
+        if status != ClusterConnectStatus.CONNECTED.value:
+            self.expect_exception = ValidationError
+        return self
+
     def set_user_kwargs(self: T, **kwargs):
         self.user_kwargs.update(kwargs)
         return self
@@ -129,7 +137,7 @@ class UpgradeScenario:
 
     def set_response_on_patch(self: T, ext_type: str, code: int = 200, body: Optional[dict] = None) -> T:
         if code not in (200, 202):
-            self.expect_exception = True
+            self.expect_exception = HttpResponseError
         self.ext_type_response_map[ext_type] = (code, body)
         return self
 
@@ -154,7 +162,9 @@ class UpgradeScenario:
             content_type="application/json",
         )
 
-        mock_cluster_record = get_mock_cluster_record(resource_group_name=resource_group_name)
+        mock_cluster_record = get_mock_cluster_record(
+            resource_group_name=resource_group_name, connected_status=self.cluster_connected_status
+        )
         mocked_responses.add(
             method=responses.GET,
             url=get_cluster_endpoint(resource_group_name=resource_group_name),
@@ -242,6 +252,12 @@ class UpgradeScenario:
         (
             UpgradeScenario()
             .set_extension(ext_type=EXTENSION_TYPE_PLATFORM, ext_vers="0.5.0")
+            .set_cluster_connected_status("Disconnected"),
+            [EXTENSION_TYPE_PLATFORM],
+        ),
+        (
+            UpgradeScenario()
+            .set_extension(ext_type=EXTENSION_TYPE_PLATFORM, ext_vers="0.5.0")
             .set_response_on_patch(ext_type=EXTENSION_TYPE_PLATFORM, code=500, body={"error": "server error"}),
             [EXTENSION_TYPE_PLATFORM],
         ),
@@ -273,8 +289,9 @@ def test_ops_upgrade(
     }
     call_kwargs.update(target_scenario.user_kwargs)
 
-    if target_scenario.expect_exception:
-        with pytest.raises(HttpResponseError):
+    expect_exception = target_scenario.expect_exception
+    if expect_exception:
+        with pytest.raises(expect_exception):
             upgrade_instance(**call_kwargs)
         return
 
