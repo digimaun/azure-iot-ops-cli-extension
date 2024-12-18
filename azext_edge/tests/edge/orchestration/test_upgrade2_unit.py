@@ -91,8 +91,18 @@ def mocked_logger(mocker):
     )
 
 
+@pytest.fixture
+def spy_upgrade_displays(mocker):
+    from azext_edge.edge.providers.orchestration.upgrade2 import Console, Progress
+
+    yield {
+        "print": mocker.spy(Console, "print"),
+        "progress.__init__": mocker.spy(Progress, "__init__"),
+    }
+
+
 class UpgradeScenario:
-    def __init__(self, description: Optional[str] = None):
+    def __init__(self, description: Optional[str] = None, confirm_yes: bool = True):
         self.extensions: Dict[str, dict] = {}
         self.targets = InitTargets(cluster_name=generate_random_string(), resource_group_name=generate_random_string())
         self.init_version_map: Dict[str, dict] = {}
@@ -103,6 +113,7 @@ class UpgradeScenario:
         self.ext_type_response_map: Dict[str, Tuple[int, Optional[dict]]] = {}
         self.expect_exception: Optional[Exception] = None
         self.description = description
+        self.confirm_yes = confirm_yes
         self.cluster_connected_status = ClusterConnectStatus.CONNECTED.value
         self._build_defaults()
 
@@ -128,7 +139,13 @@ class UpgradeScenario:
         self.user_kwargs.update(kwargs)
         return self
 
-    def set_extension(self: T, ext_type: str, ext_vers: Optional[str] = None, ext_train: Optional[str] = None) -> T:
+    def set_extension(
+        self: T, ext_type: str, ext_vers: Optional[str] = None, ext_train: Optional[str] = None, remove: bool = False
+    ) -> T:
+        if remove:
+            del self.extensions[ext_type]
+            self.expect_exception = ValidationError
+            return self
         if ext_vers:
             self.extensions[ext_type]["properties"]["version"] = ext_vers
         if ext_train:
@@ -205,40 +222,48 @@ class UpgradeScenario:
         return list(self.extensions.values())
 
 
-@pytest.mark.parametrize("no_progress", [True])
+@pytest.mark.parametrize("no_progress", [False, True])
 @pytest.mark.parametrize(
     "target_scenario,expected_patched_ext_types",
     [
-        (UpgradeScenario(), []),
+        (UpgradeScenario("Nothing to update. Cluster extensions match deployment extensions."), []),
         (
-            UpgradeScenario().set_extension(ext_type=EXTENSION_TYPE_PLATFORM, ext_vers="1.0.0"),
+            UpgradeScenario(
+                "Nothing to update. Cluster extensions match deployment extensions sans platform which is ahead."
+            ).set_extension(ext_type=EXTENSION_TYPE_PLATFORM, ext_vers="1.0.0"),
             [],
         ),
         (
-            UpgradeScenario().set_extension(ext_type=EXTENSION_TYPE_PLATFORM, ext_vers="0.5.0"),
+            UpgradeScenario(
+                "Patch a single extension, platform. Ensure confirm prompt.", confirm_yes=False
+            ).set_extension(ext_type=EXTENSION_TYPE_PLATFORM, ext_vers="0.5.0"),
             [EXTENSION_TYPE_PLATFORM],
         ),
         (
-            UpgradeScenario()
+            UpgradeScenario("Patch platform, osm and ops extensions.")
             .set_extension(ext_type=EXTENSION_TYPE_PLATFORM, ext_vers="0.5.0")
             .set_extension(ext_type=EXTENSION_TYPE_OPS, ext_vers="0.2.0")
             .set_extension(ext_type=EXTENSION_TYPE_OSM, ext_vers="0.3.0"),
             [EXTENSION_TYPE_PLATFORM, EXTENSION_TYPE_OPS, EXTENSION_TYPE_OSM],
         ),
         (
-            UpgradeScenario().set_user_kwargs(ops_config=[f"{generate_random_string()}={generate_random_string()}"]),
+            UpgradeScenario("Patch ops extension due to ops_config override").set_user_kwargs(
+                ops_config=[f"{generate_random_string()}={generate_random_string()}"]
+            ),
             [EXTENSION_TYPE_OPS],
         ),
         (
-            UpgradeScenario().set_user_kwargs(ops_version="1.2.3"),
+            UpgradeScenario("Patch ops extension due to ops_version override.").set_user_kwargs(ops_version="1.2.3"),
             [EXTENSION_TYPE_OPS],
         ),
         (
-            UpgradeScenario().set_user_kwargs(ops_train=f"{generate_random_string()}"),
+            UpgradeScenario("Patch ops extension due to ops_train override.").set_user_kwargs(
+                ops_train=f"{generate_random_string()}"
+            ),
             [EXTENSION_TYPE_OPS],
         ),
         (
-            UpgradeScenario()
+            UpgradeScenario("Patch ops, ssc and acs extensions. Acs is patched due to overrides.")
             .set_extension(ext_type=EXTENSION_TYPE_SSC, ext_vers="0.1.0")
             .set_extension(ext_type=EXTENSION_TYPE_OPS, ext_vers="0.1.0")
             .set_extension(ext_type=EXTENSION_TYPE_ACS, ext_vers="9.9.9")
@@ -250,13 +275,19 @@ class UpgradeScenario:
             [EXTENSION_TYPE_ACS, EXTENSION_TYPE_OPS, EXTENSION_TYPE_SSC],
         ),
         (
-            UpgradeScenario()
+            UpgradeScenario("Throws ValidationError because cluster is not connected.")
             .set_extension(ext_type=EXTENSION_TYPE_PLATFORM, ext_vers="0.5.0")
             .set_cluster_connected_status("Disconnected"),
             [EXTENSION_TYPE_PLATFORM],
         ),
         (
-            UpgradeScenario()
+            UpgradeScenario("Throws ValidationError because IoT Ops extension is missing.").set_extension(
+                ext_type=EXTENSION_TYPE_OPS, remove=True
+            ),
+            [],
+        ),
+        (
+            UpgradeScenario("Throws HttpResponseError due to service 500.")
             .set_extension(ext_type=EXTENSION_TYPE_PLATFORM, ext_vers="0.5.0")
             .set_response_on_patch(ext_type=EXTENSION_TYPE_PLATFORM, code=500, body={"error": "server error"}),
             [EXTENSION_TYPE_PLATFORM],
@@ -271,6 +302,8 @@ def test_ops_upgrade(
     no_progress: bool,
     mocked_logger: Mock,
     mocked_sleep: Mock,
+    spy_upgrade_displays: Dict[str, Mock],
+    mocked_confirm: Mock,
 ):
     from azext_edge.edge.commands_edge import upgrade_instance
 
@@ -285,14 +318,17 @@ def test_ops_upgrade(
         "resource_group_name": resource_group_name,
         "instance_name": instance_name,
         "no_progress": no_progress,
-        "confirm_yes": True,
+        "confirm_yes": target_scenario.confirm_yes,
     }
     call_kwargs.update(target_scenario.user_kwargs)
 
     expect_exception = target_scenario.expect_exception
+
     if expect_exception:
         with pytest.raises(expect_exception):
             upgrade_instance(**call_kwargs)
+        progress_count = 2 if expect_exception != ValidationError else 1
+        assert_displays(spy_upgrade_displays, no_progress, progress_count)
         return
 
     upgrade_result = upgrade_instance(**call_kwargs)
@@ -300,13 +336,16 @@ def test_ops_upgrade(
     if not expected_patched_ext_types:
         assert upgrade_result is None
         mocked_logger.warning.assert_called_once_with("Nothing to upgrade :)")
+        assert_displays(spy_upgrade_displays, no_progress, 1)
         return
 
     assert upgrade_result
     assert len(upgrade_result) == len(expected_patched_ext_types)
+    assert len(mocked_confirm.ask.mock_calls) == bool(not target_scenario.confirm_yes)
 
     assert_patch_order(upgrade_result, expected_patched_ext_types)
     assert_overrides(target_scenario, upgrade_result)
+    assert_displays(spy_upgrade_displays, no_progress)
 
 
 def assert_overrides(target_scenario: UpgradeScenario, upgrade_result: List[dict]):
@@ -344,3 +383,19 @@ def assert_patch_order(upgrade_result: List[dict], expected_types: List[str]):
         current_index = order_map[patched_ext["properties"]["extensionType"]]
         assert current_index > last_index
         last_index = current_index
+
+
+def assert_displays(spy_upgrade_displays: Dict[str, Mock], no_progress: bool, progress_count: int = 2):
+    assert len(spy_upgrade_displays["progress.__init__"].mock_calls) == progress_count
+    assert spy_upgrade_displays["progress.__init__"].mock_calls[0].kwargs == {
+        "transient": True,
+        "disable": no_progress,
+    }
+    if progress_count > 1:
+        assert spy_upgrade_displays["progress.__init__"].mock_calls[1].kwargs == {
+            "transient": False,
+            "disable": no_progress,
+        }
+        if not no_progress:
+            table = spy_upgrade_displays["print"].mock_calls[1].args[1]
+            assert table.title

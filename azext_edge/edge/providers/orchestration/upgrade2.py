@@ -83,8 +83,6 @@ class UpgradeManager:
         self.resource_map = self.instances.get_resource_map(
             self.instances.show(name=self.instance_name, resource_group_name=self.resource_group_name)
         )
-        if not self.resource_map.connected_cluster.connected:
-            raise ValidationError(f"Cluster {self.resource_map.connected_cluster.cluster_name} is not connected.")
         self.targets = InitTargets(
             cluster_name=self.resource_map.connected_cluster.cluster_name, resource_group_name=resource_group_name
         )
@@ -102,6 +100,8 @@ class UpgradeManager:
             disable=bool(self.no_progress),
         ) as progress:
             _ = progress.add_task("Analyzing cluster...", total=None)
+            if not self.resource_map.connected_cluster.connected:
+                raise ValidationError(f"Cluster {self.resource_map.connected_cluster.cluster_name} is not connected.")
             return ClusterUpgradeState(
                 extensions_map=self.resource_map.connected_cluster.get_extensions_by_type(
                     *list(EXTENSION_TYPE_TO_MONIKER_MAP.keys())
@@ -134,6 +134,7 @@ class UpgradeManager:
                     cluster_name=self.resource_map.connected_cluster.cluster_name,
                     extension_name=ext.extension["name"],
                     update_payload=ext.get_patch(),
+                    retry_total=0,
                 )
                 return_payload.append(updated)
                 progress.advance(upgrade_task)
@@ -210,18 +211,19 @@ class ClusterUpgradeState:
     def refresh_upgrade_state(self) -> List["ExtensionUpgradeState"]:
         ext_queue: List["ExtensionUpgradeState"] = []
 
-        # TODO @digimaun - make status check common between modules
-        if EXTENSION_TYPE_OPS not in self.extensions_map:
+        # TODO @digimaun - deterine further pre-checks.
+        if not self.extensions_map.get(EXTENSION_TYPE_OPS):
             raise ValidationError(
-                "The cluster backing the instance has an invalid state. IoT Operations extension not detected. "
+                "The cluster backing the instance has an invalid state. IoT Operations extension not detected."
             )
 
         for ext_type in EXTENSION_TYPE_TO_MONIKER_MAP:
             ext_moniker = EXTENSION_TYPE_TO_MONIKER_MAP[ext_type]
-            if ext_type in self.extensions_map:
+            extension = self.extensions_map.get(ext_type)
+            if extension:
                 ext_queue.append(
                     ExtensionUpgradeState(
-                        extension=self.extensions_map[ext_type],
+                        extension=extension,
                         desired_version_map=self.init_version_map.get(ext_moniker, {}),
                         override=self.override_map.get(ext_moniker),
                     )
