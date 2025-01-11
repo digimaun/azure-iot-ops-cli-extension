@@ -324,8 +324,7 @@ class ExtensionUpgradeState:
                 target=self.desired_config,
                 sync_mode=self.override.config_sync_mode,
             )
-            return bool(self.override.config) or bool(self.config_delta)
-        return bool(self.override.config)
+        return bool(self.override.config) or bool(self.config_delta)
 
 
 def get_default_table() -> Table:
