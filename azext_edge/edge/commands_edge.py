@@ -388,3 +388,24 @@ def instance_identity_remove(
         federated_credential_name=federated_credential_name,
         **kwargs,
     )
+
+
+def backup_instance(
+    cmd,
+    instance_name: str,
+    resource_group_name: str,
+    bundle_dir: Optional[str] = None,
+    no_progress: Optional[bool] = None,
+    confirm_yes: Optional[bool] = None,
+    **kwargs,
+) -> dict:
+    from .providers.orchestration.backup import backup_ops_instance
+
+    return backup_ops_instance(
+        cmd=cmd,
+        resource_group_name=resource_group_name,
+        instance_name=instance_name,
+        bundle_dir=bundle_dir,
+        no_progress=no_progress,
+        confirm_yes=confirm_yes,
+    )
