@@ -52,19 +52,27 @@ class StateResourceKey(Enum):
 
 
 class TemplateParams(Enum):
+    INSTANCE_NAME = "instanceName"
     CLUSTER_NAME = "clusterName"
     CUSTOM_LOCATION_NAME = "customLocationName"
 
 
 TEMPLATE_EXPRESSION_MAP = {
-    "clusterName": f"[parameters('{TemplateParams.CLUSTER_NAME.value}'))]",
+    "instanceName": f"[parameters('{TemplateParams.INSTANCE_NAME.value}')]",
+    "instanceNestedName": (f"[concat(parameters('{TemplateParams.INSTANCE_NAME.value}'), " "'{}')]"),
+    "clusterName": f"[parameters('{TemplateParams.CLUSTER_NAME.value}')]",
     "clusterId": (
         "[resourceId('Microsoft.Kubernetes/connectedClusters', " f"parameters('{TemplateParams.CLUSTER_NAME.value}'))]"
     ),
-    "customLocationName": f"[parameters('{TemplateParams.CUSTOM_LOCATION_NAME.value}'))]",
+    "customLocationName": f"[parameters('{TemplateParams.CUSTOM_LOCATION_NAME.value}')]",
     "customLocationId": (
         "[resourceId('Microsoft.ExtendedLocation/customLocations', "
         f"parameters('{TemplateParams.CUSTOM_LOCATION_NAME.value}'))]"
+    ),
+    "extensionId": (
+        "[concat(resourceId('Microsoft.Kubernetes/connectedClusters', "
+        f"parameters('{TemplateParams.CLUSTER_NAME.value}')), "
+        "'/providers/Microsoft.KubernetesConfiguration/extensions/{}')]"
     ),
 }
 
@@ -119,6 +127,9 @@ class ResourceContainer:
             self.resource_state["extendedLocation"]["name"] = TEMPLATE_EXPRESSION_MAP["customLocationId"]
 
     def _apply_nested_name(self):
+        def __extract_suffix(path: str) -> str:
+            return "/" + target_name.partition("/")[2]
+
         test: Dict[str, Union[str, int]] = parse_resource_id(self.resource_state["id"])
         target_name = test["name"]
         last_child_num = test.get("last_child_num", 0)
@@ -126,6 +137,12 @@ class ResourceContainer:
             for i in range(1, last_child_num + 1):
                 target_name += f"/{test[f'child_name_{i}']}"
         self.resource_state["name"] = target_name
+        if test["type"].lower() == "instances":
+            suffix = __extract_suffix(target_name)
+            if suffix == "/":
+                self.resource_state["name"] = TEMPLATE_EXPRESSION_MAP["instanceName"]
+            else:
+                self.resource_state["name"] = TEMPLATE_EXPRESSION_MAP["instanceNestedName"].format(suffix)
 
     def get(self):
         apply_nested_name = self.config.get("apply_nested_name", True)
@@ -190,7 +207,7 @@ class BackupManager:
         self.rcontainer_map: Dict[str, ResourceContainer] = {}
         self.parameter_map: dict = {}
 
-    def analyze_cluster(self, **override_kwargs: dict):
+    def analyze_cluster(self):
         with Progress(
             SpinnerColumn("star"),
             *Progress.get_default_columns(),
@@ -215,7 +232,7 @@ class BackupManager:
         self.parameter_map.update(build_parameter(name=TemplateParams.CLUSTER_NAME.value))
         self.parameter_map.update(build_parameter(name=TemplateParams.CUSTOM_LOCATION_NAME.value))
         # TODO
-        # self.parameter_map.update(build_parameter(name="instanceName"))
+        self.parameter_map.update(build_parameter(name=TemplateParams.INSTANCE_NAME.value))
         self.parameter_map.update(build_parameter(name="subscription", default=resource_id_parts["subscription"]))
         self.parameter_map.update(build_parameter(name="resourceGroup", default=resource_id_parts["resource_group"]))
 
@@ -253,6 +270,17 @@ class BackupManager:
         custom_location["properties"]["hostResourceId"] = TEMPLATE_EXPRESSION_MAP["clusterId"]
         # TODO
         custom_location["name"] = TEMPLATE_EXPRESSION_MAP["customLocationName"]
+
+        cl_extension_ids = []
+        for moniker in [
+            EXTENSION_TYPE_TO_MONIKER_MAP[EXTENSION_TYPE_PLATFORM],
+            EXTENSION_TYPE_TO_MONIKER_MAP[EXTENSION_TYPE_SSC],
+            EXTENSION_TYPE_TO_MONIKER_MAP[EXTENSION_TYPE_OPS],
+        ]:
+            ext_resource = self.rcontainer_map.get(moniker)
+            cl_extension_ids.append(TEMPLATE_EXPRESSION_MAP["extensionId"].format(ext_resource.resource_state["name"]))
+        custom_location["properties"]["clusterExtensionIds"] = cl_extension_ids
+
         self._add_resources(
             key=StateResourceKey.CL,
             api_version=CUSTOM_LOCATIONS_API_VERSION,
