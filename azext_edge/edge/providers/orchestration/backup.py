@@ -220,7 +220,7 @@ class BackupManager:
             _ = progress.add_task("Analyzing cluster...", total=None)
             self._analyze_extensions()
             self._analyze_instance()
-            self._analyze_instance_container()
+            #self._analyze_instance_container()
             # self._analyze_assets()
 
     def output_template(self, bundle_dir: Optional[str] = None):
