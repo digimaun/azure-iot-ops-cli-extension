@@ -272,11 +272,12 @@ class BackupManager:
         custom_location["name"] = TEMPLATE_EXPRESSION_MAP["customLocationName"]
 
         cl_extension_ids = []
-        for moniker in [
+        cl_monikers = [
             EXTENSION_TYPE_TO_MONIKER_MAP[EXTENSION_TYPE_PLATFORM],
             EXTENSION_TYPE_TO_MONIKER_MAP[EXTENSION_TYPE_SSC],
             EXTENSION_TYPE_TO_MONIKER_MAP[EXTENSION_TYPE_OPS],
-        ]:
+        ]
+        for moniker in cl_monikers:
             ext_resource = self.rcontainer_map.get(moniker)
             cl_extension_ids.append(TEMPLATE_EXPRESSION_MAP["extensionId"].format(ext_resource.resource_state["name"]))
         custom_location["properties"]["clusterExtensionIds"] = cl_extension_ids
@@ -286,6 +287,7 @@ class BackupManager:
             api_version=CUSTOM_LOCATIONS_API_VERSION,
             data_iter=[custom_location],
             config={"apply_nested_name": False},
+            depends_on=cl_monikers,
         )
         self._add_resources(
             key=StateResourceKey.INSTANCE,
