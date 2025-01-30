@@ -7,7 +7,7 @@
 from enum import Enum
 from json import dumps
 from pathlib import PurePath
-from typing import Dict, Iterable, List, Optional, Tuple, Union
+from typing import Any, Dict, Iterable, List, Optional, Tuple, Union
 from uuid import uuid4
 
 from azure.cli.core.azclierror import ValidationError
@@ -24,14 +24,17 @@ from rich.progress import (
 )
 from rich.table import Table, box
 
-from ...util import get_timestamp_now_utc, parse_kvp_nargs, should_continue_prompt
-from ...util.tools import parse_resource_id
+from ...util import get_timestamp_now_utc, should_continue_prompt
+from ...util.id_tools import parse_resource_id
 from .common import (
     CUSTOM_LOCATIONS_API_VERSION,
-    EXTENSION_MONIKER_TO_ALIAS_MAP,
+    EXTENSION_TYPE_ACS,
     EXTENSION_TYPE_OPS,
+    EXTENSION_TYPE_OSM,
+    EXTENSION_TYPE_PLATFORM,
+    EXTENSION_TYPE_SSC,
     EXTENSION_TYPE_TO_MONIKER_MAP,
-    ConfigSyncModeType,
+    OPS_EXTENSION_DEPS,
 )
 from .resources import Instances
 
@@ -48,34 +51,72 @@ class StateResourceKey(Enum):
     DATAFLOW = "dataflow"
 
 
+class TemplateParams(Enum):
+    CLUSTER_NAME = "clusterName"
+    CUSTOM_LOCATION_NAME = "customLocationName"
+
+
+TEMPLATE_EXPRESSION_MAP = {
+    "clusterName": f"[parameters('{TemplateParams.CLUSTER_NAME.value}'))]",
+    "clusterId": (
+        "[resourceId('Microsoft.Kubernetes/connectedClusters', " f"parameters('{TemplateParams.CLUSTER_NAME.value}'))]"
+    ),
+    "customLocationName": f"[parameters('{TemplateParams.CUSTOM_LOCATION_NAME.value}'))]",
+    "customLocationId": (
+        "[resourceId('Microsoft.ExtendedLocation/customLocations', "
+        f"parameters('{TemplateParams.CUSTOM_LOCATION_NAME.value}'))]"
+    ),
+}
+
+
 class ResourceContainer:
     def __init__(
         self,
         api_version: str,
         resource_state: dict,
         depends_on: Optional[List[str]] = None,
+        config: Optional[Dict[str, Any]] = None,
     ):
         self.api_version = api_version
         self.resource_state = resource_state
         self.depends_on = depends_on
+        if not config:
+            config = {}
+        self.config = config
 
-    # delete properties.ProvisioningState
+    def _prune_resource(self):
+        filter_keys = {
+            "id",
+            "systemData",
+        }
+        self.resource_state = self._prune_resource_keys(filter_keys=filter_keys, resource=self.resource_state)
+        filter_keys = {
+            "provisioningState",
+            "currentVersion",
+            "statuses",
+        }
+        self.resource_state["properties"] = self._prune_resource_keys(
+            filter_keys=filter_keys, resource=self.resource_state["properties"]
+        )
+
+    def _prune_identity(self):
+        filter_keys = {"principalId"}
+        if "identity" in self.resource_state:
+            self.resource_state["identity"] = self._prune_resource_keys(
+                filter_keys=filter_keys, resource=self.resource_state["identity"]
+            )
+
     @classmethod
-    def _prune_resource_keys(cls, resource: dict) -> dict:
-        filter_keys = {"id", "systemData", "provisioningState"}
+    def _prune_resource_keys(cls, filter_keys: set, resource: dict) -> dict:
         result = {}
         for key in resource:
             if key not in filter_keys:
                 result[key] = resource[key]
-        if "properties" in result:
-            result["properties"] = cls._prune_resource_keys(result["properties"])
         return result
 
     def _apply_cl_ref(self):
         if "extendedLocation" in self.resource_state:
-            self.resource_state["extendedLocation"][
-                "name"
-            ] = "[resourceId('Microsoft.ExtendedLocation/customLocations', parameters('customLocationName'))]"
+            self.resource_state["extendedLocation"]["name"] = TEMPLATE_EXPRESSION_MAP["customLocationId"]
 
     def _apply_nested_name(self):
         test: Dict[str, Union[str, int]] = parse_resource_id(self.resource_state["id"])
@@ -87,12 +128,17 @@ class ResourceContainer:
         self.resource_state["name"] = target_name
 
     def get(self):
-        #self._apply_cl_ref()
-        self._apply_nested_name()
+        apply_nested_name = self.config.get("apply_nested_name", True)
+        if apply_nested_name:
+            self._apply_nested_name()
+
+        self._apply_cl_ref()
+        self._prune_identity()
+        self._prune_resource()
 
         result = {
             "apiVersion": self.api_version,
-            **self._prune_resource_keys(self.resource_state),
+            **self.resource_state,
         }
         if self.depends_on:
             result["dependsOn"] = self.depends_on
@@ -142,6 +188,7 @@ class BackupManager:
         )
         self.resource_map = self.instances.get_resource_map(self.instance_record)
         self.rcontainer_map: Dict[str, ResourceContainer] = {}
+        self.parameter_map: dict = {}
 
     def analyze_cluster(self, **override_kwargs: dict):
         with Progress(
@@ -154,28 +201,71 @@ class BackupManager:
             disable=True,
         ) as progress:
             _ = progress.add_task("Analyzing cluster...", total=None)
-            # self._analyze_extensions()
+            self._analyze_extensions()
             self._analyze_instance()
             self._analyze_instance_container()
+            # self._analyze_assets()
 
     def output_template(self, bundle_dir: Optional[str] = None):
-        template_gen = TemplateGen(self.rcontainer_map)
+        template_gen = TemplateGen(self.rcontainer_map, self.parameter_map)
         template_gen.write(bundle_dir=bundle_dir)
 
+    def _build_parameters(self, instance: dict):
+        resource_id_parts = parse_resource_id(instance["id"])
+        self.parameter_map.update(build_parameter(name=TemplateParams.CLUSTER_NAME.value))
+        self.parameter_map.update(build_parameter(name=TemplateParams.CUSTOM_LOCATION_NAME.value))
+        # TODO
+        # self.parameter_map.update(build_parameter(name="instanceName"))
+        self.parameter_map.update(build_parameter(name="subscription", default=resource_id_parts["subscription"]))
+        self.parameter_map.update(build_parameter(name="resourceGroup", default=resource_id_parts["resource_group"]))
+
+    def _analyze_extensions(self):
+        depends_on_map = {
+            EXTENSION_TYPE_SSC: [EXTENSION_TYPE_TO_MONIKER_MAP[EXTENSION_TYPE_PLATFORM]],
+            EXTENSION_TYPE_ACS: [
+                EXTENSION_TYPE_TO_MONIKER_MAP[EXTENSION_TYPE_PLATFORM],
+                EXTENSION_TYPE_TO_MONIKER_MAP[EXTENSION_TYPE_OSM],
+            ],
+            EXTENSION_TYPE_OPS: [EXTENSION_TYPE_TO_MONIKER_MAP[ext_type] for ext_type in list(OPS_EXTENSION_DEPS)],
+        }
+        api_version = (
+            self.resource_map.connected_cluster.clusters.extensions.clusterconfig_mgmt_client._config.api_version
+        )
+        extension_map = self.resource_map.connected_cluster.get_extensions_by_type(
+            *list(EXTENSION_TYPE_TO_MONIKER_MAP.keys())
+        )
+        for extension_type in extension_map:
+            extension_moniker = EXTENSION_TYPE_TO_MONIKER_MAP[extension_type]
+            depends_on = depends_on_map.get(extension_type)
+            extension_map[extension_type]["scope"] = TEMPLATE_EXPRESSION_MAP["clusterId"]
+            self._add_resources(
+                key=extension_moniker,
+                api_version=api_version,
+                data_iter=[extension_map[extension_type]],
+                depends_on=depends_on,
+                config={"apply_nested_name": False},
+            )
+
     def _analyze_instance(self):
-        aio_api_version = self.instances.iotops_mgmt_client._config.api_version
+        api_version = self.instances.iotops_mgmt_client._config.api_version
         # TODO - @digimaun, in-efficient not good.
         custom_location = self.instances._get_associated_cl(self.instance_record)
+        custom_location["properties"]["hostResourceId"] = TEMPLATE_EXPRESSION_MAP["clusterId"]
+        # TODO
+        custom_location["name"] = TEMPLATE_EXPRESSION_MAP["customLocationName"]
         self._add_resources(
-            key=StateResourceKey.CL, api_version=CUSTOM_LOCATIONS_API_VERSION, data_iter=[custom_location]
+            key=StateResourceKey.CL,
+            api_version=CUSTOM_LOCATIONS_API_VERSION,
+            data_iter=[custom_location],
+            config={"apply_nested_name": False},
         )
         self._add_resources(
             key=StateResourceKey.INSTANCE,
-            api_version=aio_api_version,
+            api_version=api_version,
             data_iter=[self.instance_record],
             depends_on=[StateResourceKey.CL],
         )
-        # depends_on custom location
+        self._build_parameters(self.instance_record)
 
     def _analyze_instance_container(self):
         api_version = self.instances.iotops_mgmt_client._config.api_version
@@ -253,14 +343,19 @@ class BackupManager:
 
     def _add_resources(
         self,
-        key: StateResourceKey,
+        key: Union[StateResourceKey, str],
         api_version: str,
         data_iter: Iterable[dict],
-        depends_on: Optional[List[StateResourceKey]] = None,
+        depends_on: Optional[List[Union[StateResourceKey, str]]] = None,
+        config: Optional[Dict[str, Any]] = None,
     ):
-        key = key.value
+        if isinstance(key, StateResourceKey):
+            key = key.value
+
         if depends_on:
-            depends_on = [i.value for i in depends_on]
+            depends_on = [i.value if isinstance(i, StateResourceKey) else i for i in depends_on]
+            depends_on = [i for i in depends_on if i in self.rcontainer_map]
+
         to_enumerate = list(data_iter)
 
         count = 0
@@ -270,13 +365,17 @@ class BackupManager:
             target_key = f"{key}{suffix}"
 
             self.rcontainer_map[target_key] = ResourceContainer(
-                api_version=api_version, resource_state=resource, depends_on=depends_on
+                api_version=api_version,
+                resource_state=resource,
+                depends_on=depends_on,
+                config=config,
             )
 
 
 class TemplateGen:
-    def __init__(self, rcontainer_map: Dict[str, ResourceContainer]):
+    def __init__(self, rcontainer_map: Dict[str, ResourceContainer], parameter_map: dict):
         self.rcontainer_map = rcontainer_map
+        self.parameter_map = parameter_map
 
     def _prune_template_keys(self, template: dict) -> dict:
         result = {}
@@ -290,6 +389,7 @@ class TemplateGen:
         template = self.get_base_format()
         for template_key in self.rcontainer_map:
             template["resources"][template_key] = self.rcontainer_map[template_key].get()
+        template["parameters"].update(self.parameter_map)
         template = self._prune_template_keys(template)
         return dumps(template, indent=2)
 
@@ -326,3 +426,16 @@ def get_bundle_path(bundle_dir: Optional[str] = None, system_name: str = "aio") 
 def default_bundle_name(system_name: str) -> str:
     timestamp = get_timestamp_now_utc(format="%Y%m%dT%H%M%S")
     return f"backup_{timestamp}_{system_name}.json"
+
+
+def build_parameter(name: str, type: str = "string", metadata: Optional[dict] = None, default: Any = None) -> dict:
+    result = {
+        name: {
+            "type": type,
+        }
+    }
+    if metadata:
+        result[name]["metadata"] = metadata
+    if default:
+        result[name]["defaultValue"] = default
+    return result
