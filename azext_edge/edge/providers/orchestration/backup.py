@@ -7,7 +7,7 @@
 from enum import Enum
 from json import dumps
 from pathlib import PurePath
-from typing import Any, Dict, Iterable, List, Optional, Tuple, Union
+from typing import Any, Dict, Iterable, List, Optional, Tuple, Union, Set
 from uuid import uuid4
 
 from azure.cli.core.azclierror import ValidationError
@@ -75,6 +75,102 @@ TEMPLATE_EXPRESSION_MAP = {
         "'/providers/Microsoft.KubernetesConfiguration/extensions/{}')]"
     ),
 }
+
+
+def get_resource_id_expr(rtype: str, resource_id: str, for_instance: bool = True) -> str:
+    id_meta = parse_resource_id(resource_id)
+    initial_seg = f"parameters('{TemplateParams.INSTANCE_NAME.value}')" if for_instance else id_meta["name"]
+    target_name = f"'{initial_seg}'"
+    if for_instance:
+        target_name = f"parameters('{TemplateParams.INSTANCE_NAME.value}')"
+    last_child_num = id_meta.get("last_child_num", 0)
+    if last_child_num:
+        for i in range(1, last_child_num + 1):
+            target_name += f", '{id_meta[f'child_name_{i}']}'"
+
+    return f"[resourceId('{rtype}', {target_name})]"
+
+
+def get_type_expr(rtype: str, *args) -> str:
+    name_parts = ""
+    for arg in args:
+        name_parts += f", '{arg}'"
+    return f"[resourceId('{rtype}'{name_parts})]"
+
+
+def get_deployment_by_key(key: StateResourceKey):
+    return f"{key.value}Deployment"
+
+
+class DeploymentContainer:
+    def __init__(
+        self,
+        name: str,
+        api_version: str = "2022-09-01",
+        parameters: Optional[dict] = None,
+        depends_on: Optional[Set[str]] = None,
+    ):
+        self.name = name
+        self.rcontainer_map: Dict[str, "ResourceContainer"] = {}
+        self.api_version = api_version
+        self.parameters = parameters
+        self.depends_on = depends_on
+        if isinstance(self.depends_on, str):
+            self.depends_on = {self.depends_on}
+
+    def add_resources(
+        self,
+        key: Union[StateResourceKey, str],
+        api_version: str,
+        data_iter: Iterable[dict],
+        depends_on: Optional[List[Union[StateResourceKey, str]]] = None,
+        config: Optional[Dict[str, Any]] = None,
+    ):
+        if isinstance(key, StateResourceKey):
+            key = key.value
+
+        if depends_on:
+            depends_on = [i.value if isinstance(i, StateResourceKey) else i for i in depends_on]
+            depends_on = [i for i in depends_on if i in self.rcontainer_map]
+
+        to_enumerate = list(data_iter)
+
+        count = 0
+        for resource in to_enumerate:
+            count += 1
+            suffix = "" if count <= 1 else f"_{count}"
+            target_key = f"{key}{suffix}"
+
+            self.rcontainer_map[target_key] = ResourceContainer(
+                api_version=api_version,
+                resource_state=resource,
+                depends_on=depends_on,
+                config=config,
+            )
+
+    def get(self):
+        result = {
+            "type": "Microsoft.Resources/deployments",
+            "apiVersion": self.api_version,
+            "name": self.name,
+            "properties": {
+                "mode": "Incremental",
+                "template": {
+                    "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+                    "contentVersion": "1.0.0.0",
+                    "resources": [r.get() for r in list(self.rcontainer_map.values())],
+                },
+            },
+        }
+        if self.parameters:
+            input_param_map = {}
+            for param in self.parameters:
+                input_param_map[param] = {"value": f"[parameters('{param}')]"}
+            result["properties"]["parameters"] = input_param_map
+            result["properties"]["template"]["parameters"] = self.parameters
+        if self.depends_on:
+            result["dependsOn"] = list(self.depends_on)
+        return result
 
 
 class ResourceContainer:
@@ -220,7 +316,7 @@ class BackupManager:
             _ = progress.add_task("Analyzing cluster...", total=None)
             self._analyze_extensions()
             self._analyze_instance()
-            #self._analyze_instance_container()
+            self._analyze_instance_resources()
             # self._analyze_assets()
 
     def output_template(self, bundle_dir: Optional[str] = None):
@@ -297,79 +393,131 @@ class BackupManager:
         )
         self._build_parameters(self.instance_record)
 
-    def _analyze_instance_container(self):
+    def _analyze_instance_resources(self):
         api_version = self.instances.iotops_mgmt_client._config.api_version
         brokers_iter = self.instances.iotops_mgmt_client.broker.list_by_resource_group(
             resource_group_name=self.resource_group_name, instance_name=self.instance_name
         )
-
-        brokers = list(brokers_iter)
+        # Let us keep things simple atm
+        default_broker = list(brokers_iter)[0]
         self._add_resources(
             key=StateResourceKey.BROKER,
             api_version=api_version,
-            data_iter=brokers,
+            data_iter=[default_broker],
             depends_on=[StateResourceKey.INSTANCE],
         )
-        for broker in brokers:
-            listeners_iter = self.instances.iotops_mgmt_client.broker_listener.list_by_resource_group(
-                resource_group_name=self.resource_group_name,
-                instance_name=self.instance_name,
-                broker_name=broker["name"],
+
+        nested_params = {
+            **build_parameter(name=TemplateParams.CUSTOM_LOCATION_NAME.value),
+            **build_parameter(name=TemplateParams.INSTANCE_NAME.value),
+        }
+        broker_resource_id_expr = get_resource_id_expr(rtype=default_broker["type"], resource_id=default_broker["id"])
+        active_deployment = {}
+
+        # authN
+        authn_iter = self.instances.iotops_mgmt_client.broker_authentication.list_by_resource_group(
+            resource_group_name=self.resource_group_name,
+            instance_name=self.instance_name,
+            broker_name=default_broker["name"],
+        )
+        authn_iter = list(authn_iter)
+        if authn_iter:
+            authn_deployment_name = get_deployment_by_key(StateResourceKey.AUTHN)
+            active_deployment[StateResourceKey.AUTHN] = authn_deployment_name
+
+            authn_deployment = DeploymentContainer(
+                name=authn_deployment_name,
+                depends_on=broker_resource_id_expr,
+                parameters=nested_params,
             )
-            self._add_resources(
-                key=StateResourceKey.LISTENER,
-                api_version=api_version,
-                data_iter=listeners_iter,
-            )
-            authns_iter = self.instances.iotops_mgmt_client.broker_authentication.list_by_resource_group(
-                resource_group_name=self.resource_group_name,
-                instance_name=self.instance_name,
-                broker_name=broker["name"],
-            )
-            self._add_resources(
+            authn_deployment.add_resources(
                 key=StateResourceKey.AUTHN,
                 api_version=api_version,
-                data_iter=authns_iter,
+                data_iter=authn_iter,
             )
-            authzs_iter = self.instances.iotops_mgmt_client.broker_authorization.list_by_resource_group(
-                resource_group_name=self.resource_group_name,
-                instance_name=self.instance_name,
-                broker_name=broker["name"],
+            self.rcontainer_map[authn_deployment.name] = authn_deployment
+
+        # authZ
+        authz_iter = self.instances.iotops_mgmt_client.broker_authorization.list_by_resource_group(
+            resource_group_name=self.resource_group_name,
+            instance_name=self.instance_name,
+            broker_name=default_broker["name"],
+        )
+        authz_iter = list(authz_iter)
+        if authz_iter:
+            authz_deployment_name = get_deployment_by_key(StateResourceKey.AUTHZ)
+            active_deployment[StateResourceKey.AUTHN] = authz_deployment_name
+
+            authz_deployment = DeploymentContainer(
+                name=authz_deployment_name,
+                depends_on=broker_resource_id_expr,
+                parameters=nested_params,
             )
-            self._add_resources(
+            authz_deployment.add_resources(
                 key=StateResourceKey.AUTHZ,
                 api_version=api_version,
-                data_iter=authzs_iter,
+                data_iter=authz_iter,
             )
+            self.rcontainer_map[authz_deployment.name] = authz_deployment
 
-        profiles_iter = self.instances.iotops_mgmt_client.dataflow_profile.list_by_resource_group(
-            resource_group_name=self.resource_group_name, instance_name=self.instance_name
+        # listener
+        listeners_iter = self.instances.iotops_mgmt_client.broker_listener.list_by_resource_group(
+            resource_group_name=self.resource_group_name,
+            instance_name=self.instance_name,
+            broker_name=default_broker["name"],
         )
-        profiles = list(profiles_iter)
-        self._add_resources(
-            key=StateResourceKey.PROFILE,
-            api_version=api_version,
-            data_iter=profiles,
-        )
-        endpoints_iter = self.instances.iotops_mgmt_client.dataflow_endpoint.list_by_resource_group(
-            resource_group_name=self.resource_group_name, instance_name=self.instance_name
-        )
-        self._add_resources(
-            key=StateResourceKey.ENDPOINT,
-            api_version=api_version,
-            data_iter=endpoints_iter,
-        )
-        for profile in profiles:
-            dataflows_iter = self.instances.iotops_mgmt_client.dataflow.list_by_profile_resource(
-                resource_group_name=self.resource_group_name,
-                instance_name=self.instance_name,
-                dataflow_profile_name=profile["name"],
+        listener_iter = list(listeners_iter)
+        if listeners_iter:
+            listener_deployment_name = get_deployment_by_key(StateResourceKey.LISTENER)
+            active_deployment[StateResourceKey.LISTENER] = listener_deployment_name
+            listener_depends_on = []
+            for active in active_deployment:
+                if active in [StateResourceKey.AUTHN, StateResourceKey.AUTHZ]:
+                    listener_depends_on.append(
+                        get_type_expr("Microsoft.Resources/deployments", active_deployment[active])
+                    )
+
+            listener_deployment = DeploymentContainer(
+                name=listener_deployment_name,
+                depends_on=listener_depends_on,
+                parameters=nested_params,
             )
-            self._add_resources(
-                key=StateResourceKey.DATAFLOW,
+            listener_deployment.add_resources(
+                key=StateResourceKey.LISTENER,
                 api_version=api_version,
-                data_iter=dataflows_iter,
+                data_iter=listener_iter,
             )
+            self.rcontainer_map[listener_deployment.name] = listener_deployment
+
+        # endpoints_iter = self.instances.iotops_mgmt_client.dataflow_endpoint.list_by_resource_group(
+        #     resource_group_name=self.resource_group_name, instance_name=self.instance_name
+        # )
+        # deployment.add_resources(
+        #     key=StateResourceKey.ENDPOINT,
+        #     api_version=api_version,
+        #     data_iter=endpoints_iter,
+        # )
+
+        # profiles_iter = self.instances.iotops_mgmt_client.dataflow_profile.list_by_resource_group(
+        #     resource_group_name=self.resource_group_name, instance_name=self.instance_name
+        # )
+        # profiles = list(profiles_iter)
+        # deployment.add_resources(
+        #     key=StateResourceKey.PROFILE,
+        #     api_version=api_version,
+        #     data_iter=profiles,
+        # )
+        # for profile in profiles:
+        #     dataflows_iter = self.instances.iotops_mgmt_client.dataflow.list_by_profile_resource(
+        #         resource_group_name=self.resource_group_name,
+        #         instance_name=self.instance_name,
+        #         dataflow_profile_name=profile["name"],
+        #     )
+        #     deployment.add_resources(
+        #         key=StateResourceKey.DATAFLOW,
+        #         api_version=api_version,
+        #         data_iter=dataflows_iter,
+        #     )
 
     def _add_resources(
         self,
@@ -400,6 +548,9 @@ class BackupManager:
                 depends_on=depends_on,
                 config=config,
             )
+
+    def _add_deployment(self, key: str, deployment: DeploymentContainer):
+        self.rcontainer_map[key] = deployment
 
 
 class TemplateGen:
