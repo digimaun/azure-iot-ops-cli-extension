@@ -7,14 +7,13 @@
 from enum import Enum
 from json import dumps
 from pathlib import PurePath
-from typing import Any, Dict, Iterable, List, Optional, Tuple, Union, Set
+from typing import Any, Dict, Iterable, List, Optional, Set, Tuple, Union
 from uuid import uuid4
 
 from azure.cli.core.azclierror import ValidationError
 from knack.log import get_logger
 from packaging import version
 from rich.console import Console
-from rich.json import JSON
 from rich.progress import (
     BarColumn,
     Progress,
@@ -25,6 +24,7 @@ from rich.progress import (
 from rich.table import Table, box
 
 from ...util import get_timestamp_now_utc, should_continue_prompt
+from ...util.az_client import get_registry_mgmt_client, REGISTRY_API_VERSION
 from ...util.id_tools import parse_resource_id
 from .common import (
     CUSTOM_LOCATIONS_API_VERSION,
@@ -49,12 +49,16 @@ class StateResourceKey(Enum):
     PROFILE = "profile"
     ENDPOINT = "endpoint"
     DATAFLOW = "dataflow"
+    ASSET = "asset"
+    ASSET_ENDPOINT_PROFILE = "assetEndpointProfile"
 
 
 class TemplateParams(Enum):
     INSTANCE_NAME = "instanceName"
     CLUSTER_NAME = "clusterName"
     CUSTOM_LOCATION_NAME = "customLocationName"
+    SUBSCRIPTION = "subscription"
+    RESOURCEGROUP = "resourceGroup"
 
 
 TEMPLATE_EXPRESSION_MAP = {
@@ -91,11 +95,15 @@ def get_resource_id_expr(rtype: str, resource_id: str, for_instance: bool = True
     return f"[resourceId('{rtype}', {target_name})]"
 
 
-def get_type_expr(rtype: str, *args) -> str:
+def get_resource_id_by_parts(rtype: str, *args) -> str:
     name_parts = ""
     for arg in args:
         name_parts += f", '{arg}'"
     return f"[resourceId('{rtype}'{name_parts})]"
+
+
+def get_resource_id_by_param(rtype: str, param: TemplateParams) -> str:
+    return f"[resourceId('{rtype}', parameters('{param.value}'))]"
 
 
 def get_deployment_by_key(key: StateResourceKey):
@@ -108,7 +116,7 @@ class DeploymentContainer:
         name: str,
         api_version: str = "2022-09-01",
         parameters: Optional[dict] = None,
-        depends_on: Optional[Set[str]] = None,
+        depends_on: Optional[Union[Iterable[str], str]] = None,
     ):
         self.name = name
         self.rcontainer_map: Dict[str, "ResourceContainer"] = {}
@@ -224,7 +232,7 @@ class ResourceContainer:
 
     def _apply_nested_name(self):
         def __extract_suffix(path: str) -> str:
-            return "/" + target_name.partition("/")[2]
+            return "/" + path.partition("/")[2]
 
         test: Dict[str, Union[str, int]] = parse_resource_id(self.resource_state["id"])
         target_name = test["name"]
@@ -299,9 +307,11 @@ class BackupManager:
         self.instance_record = self.instances.show(
             name=self.instance_name, resource_group_name=self.resource_group_name
         )
+
         self.resource_map = self.instances.get_resource_map(self.instance_record)
         self.rcontainer_map: Dict[str, ResourceContainer] = {}
         self.parameter_map: dict = {}
+        self.active_deployment: Dict[StateResourceKey, str] = {}
 
     def analyze_cluster(self):
         with Progress(
@@ -317,7 +327,7 @@ class BackupManager:
             self._analyze_extensions()
             self._analyze_instance()
             self._analyze_instance_resources()
-            # self._analyze_assets()
+            self._analyze_assets()
 
     def output_template(self, bundle_dir: Optional[str] = None):
         template_gen = TemplateGen(self.rcontainer_map, self.parameter_map)
@@ -329,8 +339,12 @@ class BackupManager:
         self.parameter_map.update(build_parameter(name=TemplateParams.CUSTOM_LOCATION_NAME.value))
         # TODO
         self.parameter_map.update(build_parameter(name=TemplateParams.INSTANCE_NAME.value))
-        self.parameter_map.update(build_parameter(name="subscription", default=resource_id_parts["subscription"]))
-        self.parameter_map.update(build_parameter(name="resourceGroup", default=resource_id_parts["resource_group"]))
+        self.parameter_map.update(
+            build_parameter(name=TemplateParams.SUBSCRIPTION.value, default=resource_id_parts["subscription"])
+        )
+        self.parameter_map.update(
+            build_parameter(name=TemplateParams.RESOURCEGROUP.value, default=resource_id_parts["resource_group"])
+        )
 
     def _analyze_extensions(self):
         depends_on_map = {
@@ -407,117 +421,173 @@ class BackupManager:
             depends_on=[StateResourceKey.INSTANCE],
         )
 
+        # Initial dependencies
         nested_params = {
             **build_parameter(name=TemplateParams.CUSTOM_LOCATION_NAME.value),
             **build_parameter(name=TemplateParams.INSTANCE_NAME.value),
         }
         broker_resource_id_expr = get_resource_id_expr(rtype=default_broker["type"], resource_id=default_broker["id"])
-        active_deployment = {}
 
         # authN
-        authn_iter = self.instances.iotops_mgmt_client.broker_authentication.list_by_resource_group(
-            resource_group_name=self.resource_group_name,
-            instance_name=self.instance_name,
-            broker_name=default_broker["name"],
+        self._add_deployment(
+            key=StateResourceKey.AUTHN,
+            api_version=api_version,
+            data_iter=self.instances.iotops_mgmt_client.broker_authentication.list_by_resource_group(
+                resource_group_name=self.resource_group_name,
+                instance_name=self.instance_name,
+                broker_name=default_broker["name"],
+            ),
+            depends_on=broker_resource_id_expr,
+            parameters=nested_params,
         )
-        authn_iter = list(authn_iter)
-        if authn_iter:
-            authn_deployment_name = get_deployment_by_key(StateResourceKey.AUTHN)
-            active_deployment[StateResourceKey.AUTHN] = authn_deployment_name
-
-            authn_deployment = DeploymentContainer(
-                name=authn_deployment_name,
-                depends_on=broker_resource_id_expr,
-                parameters=nested_params,
-            )
-            authn_deployment.add_resources(
-                key=StateResourceKey.AUTHN,
-                api_version=api_version,
-                data_iter=authn_iter,
-            )
-            self.rcontainer_map[authn_deployment.name] = authn_deployment
 
         # authZ
-        authz_iter = self.instances.iotops_mgmt_client.broker_authorization.list_by_resource_group(
-            resource_group_name=self.resource_group_name,
-            instance_name=self.instance_name,
-            broker_name=default_broker["name"],
+        self._add_deployment(
+            key=StateResourceKey.AUTHZ,
+            api_version=api_version,
+            data_iter=self.instances.iotops_mgmt_client.broker_authorization.list_by_resource_group(
+                resource_group_name=self.resource_group_name,
+                instance_name=self.instance_name,
+                broker_name=default_broker["name"],
+            ),
+            depends_on=broker_resource_id_expr,
+            parameters=nested_params,
         )
-        authz_iter = list(authz_iter)
-        if authz_iter:
-            authz_deployment_name = get_deployment_by_key(StateResourceKey.AUTHZ)
-            active_deployment[StateResourceKey.AUTHN] = authz_deployment_name
-
-            authz_deployment = DeploymentContainer(
-                name=authz_deployment_name,
-                depends_on=broker_resource_id_expr,
-                parameters=nested_params,
-            )
-            authz_deployment.add_resources(
-                key=StateResourceKey.AUTHZ,
-                api_version=api_version,
-                data_iter=authz_iter,
-            )
-            self.rcontainer_map[authz_deployment.name] = authz_deployment
 
         # listener
-        listeners_iter = self.instances.iotops_mgmt_client.broker_listener.list_by_resource_group(
-            resource_group_name=self.resource_group_name,
-            instance_name=self.instance_name,
-            broker_name=default_broker["name"],
-        )
-        listener_iter = list(listeners_iter)
-        if listeners_iter:
-            listener_deployment_name = get_deployment_by_key(StateResourceKey.LISTENER)
-            active_deployment[StateResourceKey.LISTENER] = listener_deployment_name
-            listener_depends_on = []
-            for active in active_deployment:
-                if active in [StateResourceKey.AUTHN, StateResourceKey.AUTHZ]:
-                    listener_depends_on.append(
-                        get_type_expr("Microsoft.Resources/deployments", active_deployment[active])
-                    )
+        listener_depends_on = []
+        for active in self.active_deployment:
+            if active in [StateResourceKey.AUTHN, StateResourceKey.AUTHZ]:
+                listener_depends_on.append(
+                    get_resource_id_by_parts("Microsoft.Resources/deployments", self.active_deployment[active])
+                )
 
-            listener_deployment = DeploymentContainer(
-                name=listener_deployment_name,
-                depends_on=listener_depends_on,
+        self._add_deployment(
+            key=StateResourceKey.LISTENER,
+            api_version=api_version,
+            data_iter=self.instances.iotops_mgmt_client.broker_listener.list_by_resource_group(
+                resource_group_name=self.resource_group_name,
+                instance_name=self.instance_name,
+                broker_name=default_broker["name"],
+            ),
+            depends_on=listener_depends_on,
+            parameters=nested_params,
+        )
+
+        instance_resource_id_expr = get_resource_id_by_param(
+            "microsoft.iotoperations/instances", TemplateParams.INSTANCE_NAME
+        )
+
+        # endpoint
+        self._add_deployment(
+            key=StateResourceKey.ENDPOINT,
+            api_version=api_version,
+            data_iter=self.instances.iotops_mgmt_client.dataflow_endpoint.list_by_resource_group(
+                resource_group_name=self.resource_group_name, instance_name=self.instance_name
+            ),
+            depends_on=instance_resource_id_expr,
+            parameters=nested_params,
+        )
+
+        # profile
+        profile_iter = list(
+            self.instances.iotops_mgmt_client.dataflow_profile.list_by_resource_group(
+                resource_group_name=self.resource_group_name, instance_name=self.instance_name
+            )
+        )
+        self._add_deployment(
+            key=StateResourceKey.PROFILE,
+            api_version=api_version,
+            data_iter=profile_iter,
+            depends_on=instance_resource_id_expr,
+            parameters=nested_params,
+        )
+
+        # dataflow
+        if profile_iter:
+            dataflows = []
+            for profile in profile_iter:
+                dataflows.extend(
+                    self.instances.iotops_mgmt_client.dataflow.list_by_profile_resource(
+                        resource_group_name=self.resource_group_name,
+                        instance_name=self.instance_name,
+                        dataflow_profile_name=profile["name"],
+                    )
+                )
+
+            self._add_deployment(
+                key=StateResourceKey.DATAFLOW,
+                api_version=api_version,
+                data_iter=dataflows,
+                depends_on=get_resource_id_by_parts(
+                    "Microsoft.Resources/deployments", self.active_deployment[StateResourceKey.PROFILE]
+                ),
                 parameters=nested_params,
             )
-            listener_deployment.add_resources(
-                key=StateResourceKey.LISTENER,
-                api_version=api_version,
-                data_iter=listener_iter,
+
+    def _analyze_assets(self):
+        # Initial dependencies
+        nested_params = {
+            **build_parameter(name=TemplateParams.CUSTOM_LOCATION_NAME.value),
+            **build_parameter(name=TemplateParams.INSTANCE_NAME.value),
+        }
+        registry_client = get_registry_mgmt_client(
+            subscription_id=self.resource_map.subscription_id, api_version=REGISTRY_API_VERSION
+        )
+        instance_resource_id_expr = get_resource_id_by_param(
+            "microsoft.iotoperations/instances", TemplateParams.INSTANCE_NAME
+        )
+        ext_loc_id = self.instance_record["extendedLocation"]["name"].lower()
+        asset_endpoints = list(
+            registry_client.asset_endpoint_profiles.list_by_resource_group(
+                resource_group_name=self.resource_group_name
             )
-            self.rcontainer_map[listener_deployment.name] = listener_deployment
+        )
+        asset_endpoints = [ep for ep in asset_endpoints if ep["extendedLocation"]["name"].lower() == ext_loc_id]
+        self._add_deployment(
+            key=StateResourceKey.ASSET_ENDPOINT_PROFILE,
+            api_version=REGISTRY_API_VERSION,
+            data_iter=asset_endpoints,
+            depends_on=instance_resource_id_expr,
+            parameters=nested_params,
+        )
 
-        # endpoints_iter = self.instances.iotops_mgmt_client.dataflow_endpoint.list_by_resource_group(
-        #     resource_group_name=self.resource_group_name, instance_name=self.instance_name
-        # )
-        # deployment.add_resources(
-        #     key=StateResourceKey.ENDPOINT,
-        #     api_version=api_version,
-        #     data_iter=endpoints_iter,
-        # )
+        assets = list(registry_client.assets.list_by_resource_group(resource_group_name=self.resource_group_name))
+        assets = [asset for asset in assets if asset["extendedLocation"]["name"].lower() == ext_loc_id]
+        if assets and asset_endpoints:
+            self._add_deployment(
+                key=StateResourceKey.ASSET,
+                api_version=REGISTRY_API_VERSION,
+                data_iter=assets,
+                depends_on=get_resource_id_by_parts(
+                    "Microsoft.Resources/deployments", self.active_deployment[StateResourceKey.ASSET_ENDPOINT_PROFILE]
+                ),
+                parameters=nested_params,
+            )
 
-        # profiles_iter = self.instances.iotops_mgmt_client.dataflow_profile.list_by_resource_group(
-        #     resource_group_name=self.resource_group_name, instance_name=self.instance_name
-        # )
-        # profiles = list(profiles_iter)
-        # deployment.add_resources(
-        #     key=StateResourceKey.PROFILE,
-        #     api_version=api_version,
-        #     data_iter=profiles,
-        # )
-        # for profile in profiles:
-        #     dataflows_iter = self.instances.iotops_mgmt_client.dataflow.list_by_profile_resource(
-        #         resource_group_name=self.resource_group_name,
-        #         instance_name=self.instance_name,
-        #         dataflow_profile_name=profile["name"],
-        #     )
-        #     deployment.add_resources(
-        #         key=StateResourceKey.DATAFLOW,
-        #         api_version=api_version,
-        #         data_iter=dataflows_iter,
-        #     )
+    def _add_deployment(
+        self,
+        key: StateResourceKey,
+        api_version: str,
+        data_iter: Iterable,
+        depends_on: Optional[Union[str, Iterable]] = None,
+        parameters: Optional[dict] = None,
+    ):
+        data_iter = list(data_iter)
+        if data_iter:
+            deployment_name = get_deployment_by_key(key)
+            self.active_deployment[key] = deployment_name
+            deployment_container = DeploymentContainer(
+                name=deployment_name,
+                depends_on=depends_on,
+                parameters=parameters,
+            )
+            deployment_container.add_resources(
+                key=key,
+                api_version=api_version,
+                data_iter=data_iter,
+            )
+            self.rcontainer_map[deployment_name] = deployment_container
 
     def _add_resources(
         self,
@@ -527,6 +597,7 @@ class BackupManager:
         depends_on: Optional[List[Union[StateResourceKey, str]]] = None,
         config: Optional[Dict[str, Any]] = None,
     ):
+        # TODO: re-write method
         if isinstance(key, StateResourceKey):
             key = key.value
 
@@ -548,9 +619,6 @@ class BackupManager:
                 depends_on=depends_on,
                 config=config,
             )
-
-    def _add_deployment(self, key: str, deployment: DeploymentContainer):
-        self.rcontainer_map[key] = deployment
 
 
 class TemplateGen:
