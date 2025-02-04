@@ -411,6 +411,7 @@ class BackupManager:
             config={"apply_nested_name": False},
             depends_on=cl_monikers,
         )
+        schema_reg_id = self.instance_record["properties"]["schemaRegistryRef"]["resourceId"]
         self.instance_record["properties"]["schemaRegistryRef"]["resourceId"] = TEMPLATE_EXPRESSION_MAP[
             "schemaRegistryId"
         ]
@@ -423,7 +424,7 @@ class BackupManager:
         self._add_resource(
             key=StateResourceKey.ROLE_ASSIGNMENT,
             api_version="2022-04-01",
-            data=get_role_assignment(),
+            data=get_role_assignment(schema_reg_id),
             depends_on=EXTENSION_TYPE_TO_MONIKER_MAP[EXTENSION_TYPE_OPS],
             config={"apply_nested_name": False},
         )
@@ -722,15 +723,16 @@ def build_parameter(name: str, type: str = "string", metadata: Optional[dict] = 
     return result
 
 
-def get_role_assignment():
+def get_role_assignment(schema_reg_id: str):
     return {
         "type": "Microsoft.Authorization/roleAssignments",
         "name": (
             f"[guid(parameters('{TemplateParams.SCHEMA_REGISTRY_ID.value}'), "
             f"parameters('{TemplateParams.CLUSTER_NAME.value}'), resourceGroup().id)]"
         ),
+        "scope": schema_reg_id,
         "properties": {
-            "roleDefinitionId": CONTRIBUTOR_ROLE_ID,
+            "roleDefinitionId": f"[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '{CONTRIBUTOR_ROLE_ID}')]",
             "principalId": f"[reference('{EXTENSION_TYPE_TO_MONIKER_MAP[EXTENSION_TYPE_OPS]}').identity.principalId]",
             "principalType": "ServicePrincipal",
         },
