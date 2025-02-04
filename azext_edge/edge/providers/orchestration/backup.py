@@ -732,8 +732,13 @@ def get_role_assignment(schema_reg_id: str):
         ),
         "scope": schema_reg_id,
         "properties": {
-            "roleDefinitionId": f"[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '{CONTRIBUTOR_ROLE_ID}')]",
-            "principalId": f"[reference('{EXTENSION_TYPE_TO_MONIKER_MAP[EXTENSION_TYPE_OPS]}').identity.principalId]",
+            "roleDefinitionId": (
+                f"[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '{CONTRIBUTOR_ROLE_ID}')]"
+            ),
+            "principalId": (
+                f"[reference('{EXTENSION_TYPE_TO_MONIKER_MAP[EXTENSION_TYPE_OPS]}', "
+                "'2023-05-01', 'Full').identity.principalId]"
+            ),
             "principalType": "ServicePrincipal",
         },
     }
