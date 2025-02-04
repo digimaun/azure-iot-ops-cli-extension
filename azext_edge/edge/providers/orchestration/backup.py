@@ -35,6 +35,7 @@ from .common import (
     EXTENSION_TYPE_SSC,
     EXTENSION_TYPE_TO_MONIKER_MAP,
     OPS_EXTENSION_DEPS,
+    CONTRIBUTOR_ROLE_ID,
 )
 from .resources import Instances
 
@@ -51,6 +52,7 @@ class StateResourceKey(Enum):
     DATAFLOW = "dataflow"
     ASSET = "asset"
     ASSET_ENDPOINT_PROFILE = "assetEndpointProfile"
+    ROLE_ASSIGNMENT = "roleAssignment"
 
 
 class TemplateParams(Enum):
@@ -59,6 +61,7 @@ class TemplateParams(Enum):
     CUSTOM_LOCATION_NAME = "customLocationName"
     SUBSCRIPTION = "subscription"
     RESOURCEGROUP = "resourceGroup"
+    SCHEMA_REGISTRY_ID = "schemaRegistryId"
 
 
 TEMPLATE_EXPRESSION_MAP = {
@@ -78,6 +81,7 @@ TEMPLATE_EXPRESSION_MAP = {
         f"parameters('{TemplateParams.CLUSTER_NAME.value}')), "
         "'/providers/Microsoft.KubernetesConfiguration/extensions/{}')]"
     ),
+    "schemaRegistryId": f"[parameters('{TemplateParams.SCHEMA_REGISTRY_ID.value}')]",
 }
 
 
@@ -136,10 +140,7 @@ class DeploymentContainer:
     ):
         if isinstance(key, StateResourceKey):
             key = key.value
-
-        if depends_on:
-            depends_on = [i.value if isinstance(i, StateResourceKey) else i for i in depends_on]
-            depends_on = [i for i in depends_on if i in self.rcontainer_map]
+        depends_on = process_depends_on(depends_on)
 
         to_enumerate = list(data_iter)
 
@@ -186,11 +187,13 @@ class ResourceContainer:
         self,
         api_version: str,
         resource_state: dict,
-        depends_on: Optional[List[str]] = None,
+        depends_on: Optional[Iterable[str]] = None,
         config: Optional[Dict[str, Any]] = None,
     ):
         self.api_version = api_version
         self.resource_state = resource_state
+        if depends_on:
+            depends_on = list(depends_on)
         self.depends_on = depends_on
         if not config:
             config = {}
@@ -206,6 +209,7 @@ class ResourceContainer:
             "provisioningState",
             "currentVersion",
             "statuses",
+            "status",
         }
         self.resource_state["properties"] = self._prune_resource_keys(
             filter_keys=filter_keys, resource=self.resource_state["properties"]
@@ -324,6 +328,7 @@ class BackupManager:
             disable=True,
         ) as progress:
             _ = progress.add_task("Analyzing cluster...", total=None)
+            self._build_parameters(self.instance_record)
             self._analyze_extensions()
             self._analyze_instance()
             self._analyze_instance_resources()
@@ -334,17 +339,24 @@ class BackupManager:
         template_gen.write(bundle_dir=bundle_dir)
 
     def _build_parameters(self, instance: dict):
-        resource_id_parts = parse_resource_id(instance["id"])
+        # resource_id_parts = parse_resource_id(instance["id"])
         self.parameter_map.update(build_parameter(name=TemplateParams.CLUSTER_NAME.value))
         self.parameter_map.update(build_parameter(name=TemplateParams.CUSTOM_LOCATION_NAME.value))
         # TODO
         self.parameter_map.update(build_parameter(name=TemplateParams.INSTANCE_NAME.value))
         self.parameter_map.update(
-            build_parameter(name=TemplateParams.SUBSCRIPTION.value, default=resource_id_parts["subscription"])
+            build_parameter(
+                name=TemplateParams.SCHEMA_REGISTRY_ID.value,
+                default=instance["properties"]["schemaRegistryRef"]["resourceId"],
+            )
         )
-        self.parameter_map.update(
-            build_parameter(name=TemplateParams.RESOURCEGROUP.value, default=resource_id_parts["resource_group"])
-        )
+        # TODO - needed?
+        # self.parameter_map.update(
+        #     build_parameter(name=TemplateParams.SUBSCRIPTION.value, default=resource_id_parts["subscription"])
+        # )
+        # self.parameter_map.update(
+        #     build_parameter(name=TemplateParams.RESOURCEGROUP.value, default=resource_id_parts["resource_group"])
+        # )
 
     def _analyze_extensions(self):
         depends_on_map = {
@@ -365,10 +377,10 @@ class BackupManager:
             extension_moniker = EXTENSION_TYPE_TO_MONIKER_MAP[extension_type]
             depends_on = depends_on_map.get(extension_type)
             extension_map[extension_type]["scope"] = TEMPLATE_EXPRESSION_MAP["clusterId"]
-            self._add_resources(
+            self._add_resource(
                 key=extension_moniker,
                 api_version=api_version,
-                data_iter=[extension_map[extension_type]],
+                data=extension_map[extension_type],
                 depends_on=depends_on,
                 config={"apply_nested_name": False},
             )
@@ -392,20 +404,29 @@ class BackupManager:
             cl_extension_ids.append(TEMPLATE_EXPRESSION_MAP["extensionId"].format(ext_resource.resource_state["name"]))
         custom_location["properties"]["clusterExtensionIds"] = cl_extension_ids
 
-        self._add_resources(
+        self._add_resource(
             key=StateResourceKey.CL,
             api_version=CUSTOM_LOCATIONS_API_VERSION,
-            data_iter=[custom_location],
+            data=custom_location,
             config={"apply_nested_name": False},
             depends_on=cl_monikers,
         )
-        self._add_resources(
+        self.instance_record["properties"]["schemaRegistryRef"]["resourceId"] = TEMPLATE_EXPRESSION_MAP[
+            "schemaRegistryId"
+        ]
+        self._add_resource(
             key=StateResourceKey.INSTANCE,
             api_version=api_version,
-            data_iter=[self.instance_record],
-            depends_on=[StateResourceKey.CL],
+            data=self.instance_record,
+            depends_on=StateResourceKey.CL,
         )
-        self._build_parameters(self.instance_record)
+        self._add_resource(
+            key=StateResourceKey.ROLE_ASSIGNMENT,
+            api_version="2022-04-01",
+            data=get_role_assignment(),
+            depends_on=EXTENSION_TYPE_TO_MONIKER_MAP[EXTENSION_TYPE_OPS],
+            config={"apply_nested_name": False},
+        )
 
     def _analyze_instance_resources(self):
         api_version = self.instances.iotops_mgmt_client._config.api_version
@@ -414,11 +435,11 @@ class BackupManager:
         )
         # Let us keep things simple atm
         default_broker = list(brokers_iter)[0]
-        self._add_resources(
+        self._add_resource(
             key=StateResourceKey.BROKER,
             api_version=api_version,
-            data_iter=[default_broker],
-            depends_on=[StateResourceKey.INSTANCE],
+            data=default_broker,
+            depends_on=StateResourceKey.INSTANCE,
         )
 
         # Initial dependencies
@@ -570,7 +591,7 @@ class BackupManager:
         key: StateResourceKey,
         api_version: str,
         data_iter: Iterable,
-        depends_on: Optional[Union[str, Iterable]] = None,
+        depends_on: Optional[Union[str, Iterable[str]]] = None,
         parameters: Optional[dict] = None,
     ):
         data_iter = list(data_iter)
@@ -589,36 +610,24 @@ class BackupManager:
             )
             self.rcontainer_map[deployment_name] = deployment_container
 
-    def _add_resources(
+    def _add_resource(
         self,
         key: Union[StateResourceKey, str],
         api_version: str,
-        data_iter: Iterable[dict],
-        depends_on: Optional[List[Union[StateResourceKey, str]]] = None,
+        data: dict,
+        depends_on: Optional[Union[Iterable[str], str]] = None,
         config: Optional[Dict[str, Any]] = None,
     ):
-        # TODO: re-write method
         if isinstance(key, StateResourceKey):
             key = key.value
+        depends_on = process_depends_on(depends_on)
 
-        if depends_on:
-            depends_on = [i.value if isinstance(i, StateResourceKey) else i for i in depends_on]
-            depends_on = [i for i in depends_on if i in self.rcontainer_map]
-
-        to_enumerate = list(data_iter)
-
-        count = 0
-        for resource in to_enumerate:
-            count += 1
-            suffix = "" if count <= 1 else f"_{count}"
-            target_key = f"{key}{suffix}"
-
-            self.rcontainer_map[target_key] = ResourceContainer(
-                api_version=api_version,
-                resource_state=resource,
-                depends_on=depends_on,
-                config=config,
-            )
+        self.rcontainer_map[key] = ResourceContainer(
+            api_version=api_version,
+            resource_state=data,
+            depends_on=depends_on,
+            config=config,
+        )
 
 
 class TemplateGen:
@@ -664,6 +673,29 @@ class TemplateGen:
         }
 
 
+def process_depends_on(
+    depends_on: Optional[Union[Iterable[str], str, Iterable[StateResourceKey], StateResourceKey]] = None
+) -> Optional[Iterable[str]]:
+    if not depends_on:
+        return
+
+    result = []
+    if isinstance(depends_on, StateResourceKey):
+        depends_on = depends_on.value
+    if isinstance(depends_on, str):
+        result.append(depends_on)
+        return result
+
+    if isinstance(depends_on, Iterable):
+        for d in depends_on:
+            if isinstance(d, StateResourceKey):
+                d = d.value
+            if isinstance(d, str):
+                result.append(d)
+
+    return result
+
+
 def get_bundle_path(bundle_dir: Optional[str] = None, system_name: str = "aio") -> PurePath:
     from ...util import normalize_dir
 
@@ -688,3 +720,18 @@ def build_parameter(name: str, type: str = "string", metadata: Optional[dict] = 
     if default:
         result[name]["defaultValue"] = default
     return result
+
+
+def get_role_assignment():
+    return {
+        "type": "Microsoft.Authorization/roleAssignments",
+        "name": (
+            f"[guid(parameters('{TemplateParams.SCHEMA_REGISTRY_ID.value}'), "
+            f"parameters('{TemplateParams.CLUSTER_NAME.value}'), resourceGroup().id)]"
+        ),
+        "properties": {
+            "roleDefinitionId": CONTRIBUTOR_ROLE_ID,
+            "principalId": f"[reference('{EXTENSION_TYPE_TO_MONIKER_MAP[EXTENSION_TYPE_OPS]}').identity.principalId]",
+            "principalType": "ServicePrincipal",
+        },
+    }

@@ -28,6 +28,7 @@ from ...util.az_client import (
     wait_for_terminal_state,
 )
 from .common import (
+    CONTRIBUTOR_ROLE_ID,
     EXTENSION_TYPE_OPS,
     EXTENSION_TYPE_PLATFORM,
     EXTENSION_TYPE_SSC,
@@ -66,8 +67,6 @@ class WorkRecord:
 
 
 PROVISIONING_STATE_SUCCESS = "Succeeded"
-
-CONTRIBUTOR_ROLE_ID = "b24988ac-6180-42a0-ab88-20f7382dd24c"
 
 
 # TODO - @digimaun - make common
