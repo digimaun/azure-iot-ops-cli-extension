@@ -358,7 +358,10 @@ class BackupManager:
         self.parameter_map.update(
             build_parameter(
                 name=TemplateParams.RESOURCE_SUFFIX.value,
-                default="[take(uniqueString(resourceGroup().id, parameters('clusterName'), parameters('instanceName')), 5)]",
+                default=(
+                    "[take(uniqueString(resourceGroup().id, "
+                    "parameters('clusterName'), parameters('instanceName')), 5)]"
+                ),
             )
         )
         self.parameter_map.update(
