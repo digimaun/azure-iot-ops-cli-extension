@@ -7,6 +7,7 @@
 from .common import (
     assemble_nargs_to_dict,
     build_query,
+    chunk_list,
     generate_secret,
     get_timestamp_now_utc,
     is_enabled_str,
@@ -28,6 +29,7 @@ from .x509 import generate_self_signed_cert
 __all__ = [
     "assemble_nargs_to_dict",
     "build_query",
+    "chunk_list",
     "get_timestamp_now_utc",
     "set_log_level",
     "generate_secret",

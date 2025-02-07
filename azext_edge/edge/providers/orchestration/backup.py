@@ -23,7 +23,7 @@ from rich.progress import (
 )
 from rich.table import Table, box
 
-from ...util import get_timestamp_now_utc, should_continue_prompt
+from ...util import get_timestamp_now_utc, should_continue_prompt, chunk_list
 from ...util.az_client import (
     REGISTRY_API_VERSION,
     get_registry_mgmt_client,
@@ -42,6 +42,7 @@ from .common import (
 )
 from .resources import Instances
 from .resources.instances import get_fc_name
+from ....constants import VERSION as CLI_VERSION
 
 
 class StateResourceKey(Enum):
@@ -116,10 +117,6 @@ def get_resource_id_by_parts(rtype: str, *args) -> str:
 
 def get_resource_id_by_param(rtype: str, param: TemplateParams) -> str:
     return f"[resourceId('{rtype}', parameters('{param.value}'))]"
-
-
-def get_deployment_by_key(key: StateResourceKey):
-    return f"{key.value}Deployment"
 
 
 class DeploymentContainer:
@@ -328,7 +325,9 @@ class BackupManager:
         self.rcontainer_map: Dict[str, ResourceContainer] = {}
         self.parameter_map: dict = {}
         self.variable_map: dict = {}
-        self.active_deployment: Dict[StateResourceKey, str] = {}
+        self.metadata_map: dict = {}
+        self.active_deployment: Dict[StateResourceKey, List[str]] = {}
+        self.chunk_size = 800
 
     def analyze_cluster(self):
         with Progress(
@@ -343,6 +342,7 @@ class BackupManager:
             _ = progress.add_task("Analyzing cluster...", total=None)
             self._build_parameters(self.instance_record)
             self._build_variables()
+            self._build_metadata()
 
             self._analyze_extensions()
             self._analyze_instance()
@@ -352,7 +352,7 @@ class BackupManager:
             self._analyze_secretsync()
 
     def output_template(self, bundle_dir: Optional[str] = None):
-        template_gen = TemplateGen(self.rcontainer_map, self.parameter_map, self.variable_map)
+        template_gen = TemplateGen(self.rcontainer_map, self.parameter_map, self.variable_map, self.metadata_map)
         template_gen.write(bundle_dir=bundle_dir)
 
     def _build_parameters(self, instance: dict):
@@ -382,6 +382,10 @@ class BackupManager:
 
     def _build_variables(self):
         self.variable_map["aioExtName"] = "[format('azure-iot-operations-{0}', parameters('resourceSuffix'))]"
+
+    def _build_metadata(self):
+        self.metadata_map["opsCliVersion"] = CLI_VERSION
+        self.metadata_map["clonedInstanceId"] = self.instance_record["id"]
 
     def _analyze_extensions(self):
         depends_on_map = {
@@ -516,7 +520,7 @@ class BackupManager:
         for active in self.active_deployment:
             if active in [StateResourceKey.AUTHN, StateResourceKey.AUTHZ]:
                 listener_depends_on.append(
-                    get_resource_id_by_parts("Microsoft.Resources/deployments", self.active_deployment[active])
+                    get_resource_id_by_parts("Microsoft.Resources/deployments", self.active_deployment[active][-1])
                 )
 
         self._add_deployment(
@@ -577,7 +581,7 @@ class BackupManager:
                 api_version=api_version,
                 data_iter=dataflows,
                 depends_on=get_resource_id_by_parts(
-                    "Microsoft.Resources/deployments", self.active_deployment[StateResourceKey.PROFILE]
+                    "Microsoft.Resources/deployments", self.active_deployment[StateResourceKey.PROFILE][-1]
                 ),
                 parameters=nested_params,
             )
@@ -616,7 +620,8 @@ class BackupManager:
                 api_version=REGISTRY_API_VERSION,
                 data_iter=assets,
                 depends_on=get_resource_id_by_parts(
-                    "Microsoft.Resources/deployments", self.active_deployment[StateResourceKey.ASSET_ENDPOINT_PROFILE]
+                    "Microsoft.Resources/deployments",
+                    self.active_deployment[StateResourceKey.ASSET_ENDPOINT_PROFILE][-1],
                 ),
                 parameters=nested_params,
             )
@@ -660,7 +665,7 @@ class BackupManager:
                 api_version=ssc_api_version,
                 data_iter=ssc_secretsyncs,
                 depends_on=get_resource_id_by_parts(
-                    "Microsoft.Resources/deployments", self.active_deployment[StateResourceKey.SSC_SPC]
+                    "Microsoft.Resources/deployments", self.active_deployment[StateResourceKey.SSC_SPC][-1]
                 ),
                 parameters=nested_params,
             )
@@ -710,6 +715,13 @@ class BackupManager:
                     },
                 )
 
+    def add_deployment_by_key(self, key: StateResourceKey) -> str:
+        deployments_by_key = self.active_deployment.get(key, [])
+        new_deployment_name = f"{key.value}Deployment_{len(deployments_by_key)+1}"
+        deployments_by_key.append(new_deployment_name)
+        self.active_deployment[key] = deployments_by_key
+        return new_deployment_name
+
     def _add_deployment(
         self,
         key: StateResourceKey,
@@ -720,19 +732,20 @@ class BackupManager:
     ):
         data_iter = list(data_iter)
         if data_iter:
-            deployment_name = get_deployment_by_key(key)
-            self.active_deployment[key] = deployment_name
-            deployment_container = DeploymentContainer(
-                name=deployment_name,
-                depends_on=depends_on,
-                parameters=parameters,
-            )
-            deployment_container.add_resources(
-                key=key,
-                api_version=api_version,
-                data_iter=data_iter,
-            )
-            self.rcontainer_map[deployment_name] = deployment_container
+            chunked_list_data = chunk_list(data_iter, self.chunk_size)
+            for chunk in chunked_list_data:
+                deployment_name = self.add_deployment_by_key(key)
+                deployment_container = DeploymentContainer(
+                    name=deployment_name,
+                    depends_on=depends_on,
+                    parameters=parameters,
+                )
+                deployment_container.add_resources(
+                    key=key,
+                    api_version=api_version,
+                    data_iter=chunk,
+                )
+                self.rcontainer_map[deployment_name] = deployment_container
 
     def _add_resource(
         self,
@@ -755,10 +768,13 @@ class BackupManager:
 
 
 class TemplateGen:
-    def __init__(self, rcontainer_map: Dict[str, ResourceContainer], parameter_map: dict, variable_map: dict):
+    def __init__(
+        self, rcontainer_map: Dict[str, ResourceContainer], parameter_map: dict, variable_map: dict, metadata_map: dict
+    ):
         self.rcontainer_map = rcontainer_map
         self.parameter_map = parameter_map
         self.variable_map = variable_map
+        self.metadata_map = metadata_map
 
     def _prune_template_keys(self, template: dict) -> dict:
         result = {}
@@ -774,6 +790,7 @@ class TemplateGen:
             template["resources"][template_key] = self.rcontainer_map[template_key].get()
         template["parameters"].update(self.parameter_map)
         template["variables"].update(self.variable_map)
+        template["metadata"].update(self.metadata_map)
         template = self._prune_template_keys(template)
         return dumps(template, indent=2)
 
@@ -789,6 +806,7 @@ class TemplateGen:
             "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
             "languageVersion": "2.0",
             "contentVersion": "1.0.0.0",
+            "metadata": {},
             "apiProfile": "",
             "definitions": {},
             "parameters": {},

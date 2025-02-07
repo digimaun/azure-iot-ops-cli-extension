@@ -220,3 +220,19 @@ def should_continue_prompt(confirm_yes: Optional[bool] = None, context: str = "D
         return False
 
     return True
+
+
+def chunk_list(initial: list, chunk_size: int) -> List[list]:
+    result, temp, count = [], [], 0
+
+    for item in initial:
+        temp.append(item)
+        count += 1
+        if count >= chunk_size:
+            result.append(temp)
+            temp, count = [], 0
+
+    if temp:
+        result.append(temp)
+
+    return result
