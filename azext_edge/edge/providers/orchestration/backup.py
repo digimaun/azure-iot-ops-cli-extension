@@ -24,9 +24,13 @@ from rich.progress import (
 from rich.table import Table, box
 
 from ...util import get_timestamp_now_utc, should_continue_prompt
-from ...util.az_client import get_registry_mgmt_client, REGISTRY_API_VERSION
+from ...util.az_client import (
+    REGISTRY_API_VERSION,
+    get_registry_mgmt_client,
+)
 from ...util.id_tools import parse_resource_id
 from .common import (
+    CONTRIBUTOR_ROLE_ID,
     CUSTOM_LOCATIONS_API_VERSION,
     EXTENSION_TYPE_ACS,
     EXTENSION_TYPE_OPS,
@@ -35,9 +39,9 @@ from .common import (
     EXTENSION_TYPE_SSC,
     EXTENSION_TYPE_TO_MONIKER_MAP,
     OPS_EXTENSION_DEPS,
-    CONTRIBUTOR_ROLE_ID,
 )
 from .resources import Instances
+from .resources.instances import get_fc_name
 
 
 class StateResourceKey(Enum):
@@ -52,7 +56,10 @@ class StateResourceKey(Enum):
     DATAFLOW = "dataflow"
     ASSET = "asset"
     ASSET_ENDPOINT_PROFILE = "assetEndpointProfile"
+    SSC_SPC = "secretProviderClass"
+    SSC_SECRETSYNC = "secretSync"
     ROLE_ASSIGNMENT = "roleAssignment"
+    FEDERATE = "identityFederation"
 
 
 class TemplateParams(Enum):
@@ -62,6 +69,7 @@ class TemplateParams(Enum):
     SUBSCRIPTION = "subscription"
     RESOURCEGROUP = "resourceGroup"
     SCHEMA_REGISTRY_ID = "schemaRegistryId"
+    RESOURCE_SUFFIX = "resourceSuffix"
 
 
 TEMPLATE_EXPRESSION_MAP = {
@@ -274,6 +282,7 @@ def backup_ops_instance(
     cmd,
     resource_group_name: str,
     instance_name: str,
+    oidc_issuer: Optional[str] = None,
     bundle_dir: Optional[str] = None,
     no_progress: Optional[bool] = None,
     confirm_yes: Optional[bool] = None,
@@ -282,6 +291,7 @@ def backup_ops_instance(
     backup_manager = BackupManager(
         cmd=cmd,
         instance_name=instance_name,
+        oidc_issuer=oidc_issuer,
         resource_group_name=resource_group_name,
         no_progress=no_progress,
     )
@@ -301,10 +311,12 @@ class BackupManager:
         cmd,
         resource_group_name: str,
         instance_name: str,
+        oidc_issuer: Optional[str] = None,
         no_progress: Optional[bool] = None,
     ):
         self.cmd = cmd
         self.instance_name = instance_name
+        self.oidc_issuer = oidc_issuer
         self.resource_group_name = resource_group_name
         self.no_progress = no_progress
         self.instances = Instances(self.cmd)
@@ -331,32 +343,36 @@ class BackupManager:
             self._build_parameters(self.instance_record)
             self._analyze_extensions()
             self._analyze_instance()
+            self._analyze_instance_identity()
             self._analyze_instance_resources()
             self._analyze_assets()
+            self._analyze_secretsync()
 
     def output_template(self, bundle_dir: Optional[str] = None):
         template_gen = TemplateGen(self.rcontainer_map, self.parameter_map)
         template_gen.write(bundle_dir=bundle_dir)
 
     def _build_parameters(self, instance: dict):
-        # resource_id_parts = parse_resource_id(instance["id"])
         self.parameter_map.update(build_parameter(name=TemplateParams.CLUSTER_NAME.value))
-        self.parameter_map.update(build_parameter(name=TemplateParams.CUSTOM_LOCATION_NAME.value))
-        # TODO
         self.parameter_map.update(build_parameter(name=TemplateParams.INSTANCE_NAME.value))
+        self.parameter_map.update(
+            build_parameter(
+                name=TemplateParams.RESOURCE_SUFFIX.value,
+                default="[take(uniqueString(resourceGroup().id, parameters('clusterName'), parameters('instanceName')), 5)]",
+            )
+        )
+        self.parameter_map.update(
+            build_parameter(
+                name=TemplateParams.CUSTOM_LOCATION_NAME.value,
+                default="[format('location-{0}', parameters('resourceSuffix'))]",
+            )
+        )
         self.parameter_map.update(
             build_parameter(
                 name=TemplateParams.SCHEMA_REGISTRY_ID.value,
                 default=instance["properties"]["schemaRegistryRef"]["resourceId"],
             )
         )
-        # TODO - needed?
-        # self.parameter_map.update(
-        #     build_parameter(name=TemplateParams.SUBSCRIPTION.value, default=resource_id_parts["subscription"])
-        # )
-        # self.parameter_map.update(
-        #     build_parameter(name=TemplateParams.RESOURCEGROUP.value, default=resource_id_parts["resource_group"])
-        # )
 
     def _analyze_extensions(self):
         depends_on_map = {
@@ -548,7 +564,6 @@ class BackupManager:
             )
 
     def _analyze_assets(self):
-        # Initial dependencies
         nested_params = {
             **build_parameter(name=TemplateParams.CUSTOM_LOCATION_NAME.value),
             **build_parameter(name=TemplateParams.INSTANCE_NAME.value),
@@ -586,6 +601,95 @@ class BackupManager:
                 ),
                 parameters=nested_params,
             )
+
+    def _analyze_secretsync(self):
+        nested_params = {
+            **build_parameter(name=TemplateParams.CUSTOM_LOCATION_NAME.value),
+            **build_parameter(name=TemplateParams.INSTANCE_NAME.value),
+        }
+        ssc_client = self.instances.ssc_mgmt_client
+        ssc_api_version = ssc_client._config.api_version
+        instance_resource_id_expr = get_resource_id_by_param(
+            "microsoft.iotoperations/instances", TemplateParams.INSTANCE_NAME
+        )
+        ext_loc_id = self.instance_record["extendedLocation"]["name"].lower()
+        ssc_spcs = list(
+            ssc_client.azure_key_vault_secret_provider_classes.list_by_resource_group(
+                resource_group_name=self.resource_group_name
+            )
+        )
+        ssc_spcs = [spc for spc in ssc_spcs if spc["extendedLocation"]["name"].lower() == ext_loc_id]
+        self._add_deployment(
+            key=StateResourceKey.SSC_SPC,
+            api_version=ssc_api_version,
+            data_iter=ssc_spcs,
+            depends_on=instance_resource_id_expr,
+            parameters=nested_params,
+        )
+
+        ssc_secretsyncs = list(
+            ssc_client.secret_syncs.list_by_resource_group(resource_group_name=self.resource_group_name)
+        )
+        ssc_secretsyncs = [
+            secretsync
+            for secretsync in ssc_secretsyncs
+            if secretsync["extendedLocation"]["name"].lower() == ext_loc_id
+        ]
+        if ssc_secretsyncs and ssc_spcs:
+            self._add_deployment(
+                key=StateResourceKey.SSC_SECRETSYNC,
+                api_version=ssc_api_version,
+                data_iter=ssc_secretsyncs,
+                depends_on=get_resource_id_by_parts(
+                    "Microsoft.Resources/deployments", self.active_deployment[StateResourceKey.SSC_SPC]
+                ),
+                parameters=nested_params,
+            )
+
+    def _analyze_instance_identity(self):
+        if not self.oidc_issuer:
+            return
+
+        uami_ids = []
+        identity: dict = self.instance_record.get("identity", {}).get("userAssignedIdentities", {})
+        uami_ids.extend(list(identity.keys()))
+
+        if not uami_ids:
+            return
+
+        msi_client = self.instances.msi_mgmt_client
+        for i in range(len(uami_ids)):
+            resource_id = parse_resource_id(uami_ids[i])
+            credentials = list(
+                msi_client.federated_identity_credentials.list(
+                    resource_group_name=resource_id["resource_group"], resource_name=resource_id["name"]
+                )
+            )
+            filtered_creds = []
+            for cred in credentials:
+                if cred["properties"]["issuer"] != self.oidc_issuer:
+                    filtered_creds.append(cred)
+
+            for cred in filtered_creds:
+                if ":aio-" not in cred["properties"]["subject"]:
+                    continue
+
+                msi_client.federated_identity_credentials.create_or_update(
+                    resource_group_name=resource_id["resource_group"],
+                    resource_name=resource_id["name"],
+                    federated_identity_credential_resource_name=get_fc_name(
+                        cluster_name=self.oidc_issuer,
+                        oidc_issuer=self.oidc_issuer,
+                        subject=cred["properties"]["subject"],
+                    ),
+                    parameters={
+                        "properties": {
+                            "subject": cred["properties"]["subject"],
+                            "audiences": cred["properties"]["audiences"],
+                            "issuer": self.oidc_issuer,
+                        }
+                    },
+                )
 
     def _add_deployment(
         self,
@@ -730,7 +834,7 @@ def get_role_assignment(schema_reg_id: str):
             f"[guid(parameters('{TemplateParams.SCHEMA_REGISTRY_ID.value}'), "
             f"parameters('{TemplateParams.CLUSTER_NAME.value}'), resourceGroup().id)]"
         ),
-        "scope": schema_reg_id,
+        "scope": f"[parameters('{TemplateParams.SCHEMA_REGISTRY_ID.value}')]",
         "properties": {
             "roleDefinitionId": (
                 f"[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '{CONTRIBUTOR_ROLE_ID}')]"
