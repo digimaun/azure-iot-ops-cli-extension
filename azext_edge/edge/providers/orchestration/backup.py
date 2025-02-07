@@ -87,7 +87,7 @@ TEMPLATE_EXPRESSION_MAP = {
     "extensionId": (
         "[concat(resourceId('Microsoft.Kubernetes/connectedClusters', "
         f"parameters('{TemplateParams.CLUSTER_NAME.value}')), "
-        "'/providers/Microsoft.KubernetesConfiguration/extensions/{}')]"
+        "'/providers/Microsoft.KubernetesConfiguration/extensions/{})]"
     ),
     "schemaRegistryId": f"[parameters('{TemplateParams.SCHEMA_REGISTRY_ID.value}')]",
 }
@@ -327,6 +327,7 @@ class BackupManager:
         self.resource_map = self.instances.get_resource_map(self.instance_record)
         self.rcontainer_map: Dict[str, ResourceContainer] = {}
         self.parameter_map: dict = {}
+        self.variable_map: dict = {}
         self.active_deployment: Dict[StateResourceKey, str] = {}
 
     def analyze_cluster(self):
@@ -341,6 +342,8 @@ class BackupManager:
         ) as progress:
             _ = progress.add_task("Analyzing cluster...", total=None)
             self._build_parameters(self.instance_record)
+            self._build_variables()
+
             self._analyze_extensions()
             self._analyze_instance()
             self._analyze_instance_identity()
@@ -349,7 +352,7 @@ class BackupManager:
             self._analyze_secretsync()
 
     def output_template(self, bundle_dir: Optional[str] = None):
-        template_gen = TemplateGen(self.rcontainer_map, self.parameter_map)
+        template_gen = TemplateGen(self.rcontainer_map, self.parameter_map, self.variable_map)
         template_gen.write(bundle_dir=bundle_dir)
 
     def _build_parameters(self, instance: dict):
@@ -377,6 +380,9 @@ class BackupManager:
             )
         )
 
+    def _build_variables(self):
+        self.variable_map["aioExtName"] = "[format('azure-iot-operations-{0}', parameters('resourceSuffix'))]"
+
     def _analyze_extensions(self):
         depends_on_map = {
             EXTENSION_TYPE_SSC: [EXTENSION_TYPE_TO_MONIKER_MAP[EXTENSION_TYPE_PLATFORM]],
@@ -396,6 +402,9 @@ class BackupManager:
             extension_moniker = EXTENSION_TYPE_TO_MONIKER_MAP[extension_type]
             depends_on = depends_on_map.get(extension_type)
             extension_map[extension_type]["scope"] = TEMPLATE_EXPRESSION_MAP["clusterId"]
+            if extension_moniker == EXTENSION_TYPE_TO_MONIKER_MAP[EXTENSION_TYPE_OPS]:
+                extension_map[extension_type]["name"] = "[variables('aioExtName')]"
+
             self._add_resource(
                 key=extension_moniker,
                 api_version=api_version,
@@ -406,7 +415,7 @@ class BackupManager:
 
     def _analyze_instance(self):
         api_version = self.instances.iotops_mgmt_client._config.api_version
-        # TODO - @digimaun, in-efficient not good.
+        # TODO - @digimaun, not efficient.
         custom_location = self.instances._get_associated_cl(self.instance_record)
         custom_location["properties"]["hostResourceId"] = TEMPLATE_EXPRESSION_MAP["clusterId"]
         # TODO
@@ -420,8 +429,15 @@ class BackupManager:
         ]
         for moniker in cl_monikers:
             ext_resource = self.rcontainer_map.get(moniker)
-            cl_extension_ids.append(TEMPLATE_EXPRESSION_MAP["extensionId"].format(ext_resource.resource_state["name"]))
+            if moniker == EXTENSION_TYPE_TO_MONIKER_MAP[EXTENSION_TYPE_OPS]:
+                cl_extension_ids.append(TEMPLATE_EXPRESSION_MAP["extensionId"].format("', variables('aioExtName')"))
+            else:
+                cl_extension_ids.append(
+                    TEMPLATE_EXPRESSION_MAP["extensionId"].format(f"{ext_resource.resource_state['name']}'")
+                )
+
         custom_location["properties"]["clusterExtensionIds"] = cl_extension_ids
+        custom_location["properties"]["displayName"] = "[parameters('customLocationName')]"
 
         self._add_resource(
             key=StateResourceKey.CL,
@@ -430,7 +446,7 @@ class BackupManager:
             config={"apply_nested_name": False},
             depends_on=cl_monikers,
         )
-        schema_reg_id = self.instance_record["properties"]["schemaRegistryRef"]["resourceId"]
+        # schema_reg_id = self.instance_record["properties"]["schemaRegistryRef"]["resourceId"]
         self.instance_record["properties"]["schemaRegistryRef"]["resourceId"] = TEMPLATE_EXPRESSION_MAP[
             "schemaRegistryId"
         ]
@@ -443,7 +459,7 @@ class BackupManager:
         self._add_resource(
             key=StateResourceKey.ROLE_ASSIGNMENT,
             api_version="2022-04-01",
-            data=get_role_assignment(schema_reg_id),
+            data=get_role_assignment(),
             depends_on=EXTENSION_TYPE_TO_MONIKER_MAP[EXTENSION_TYPE_OPS],
             config={"apply_nested_name": False},
         )
@@ -739,9 +755,10 @@ class BackupManager:
 
 
 class TemplateGen:
-    def __init__(self, rcontainer_map: Dict[str, ResourceContainer], parameter_map: dict):
+    def __init__(self, rcontainer_map: Dict[str, ResourceContainer], parameter_map: dict, variable_map: dict):
         self.rcontainer_map = rcontainer_map
         self.parameter_map = parameter_map
+        self.variable_map = variable_map
 
     def _prune_template_keys(self, template: dict) -> dict:
         result = {}
@@ -756,6 +773,7 @@ class TemplateGen:
         for template_key in self.rcontainer_map:
             template["resources"][template_key] = self.rcontainer_map[template_key].get()
         template["parameters"].update(self.parameter_map)
+        template["variables"].update(self.variable_map)
         template = self._prune_template_keys(template)
         return dumps(template, indent=2)
 
@@ -830,7 +848,7 @@ def build_parameter(name: str, type: str = "string", metadata: Optional[dict] = 
     return result
 
 
-def get_role_assignment(schema_reg_id: str):
+def get_role_assignment():
     return {
         "type": "Microsoft.Authorization/roleAssignments",
         "name": (
