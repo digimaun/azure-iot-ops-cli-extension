@@ -23,10 +23,10 @@ from rich.progress import (
 )
 from rich.table import Table, box
 
-from ...util import get_timestamp_now_utc, should_continue_prompt, chunk_list
+from ....constants import VERSION as CLI_VERSION
+from ...util import chunk_list, get_timestamp_now_utc, should_continue_prompt
 from ...util.az_client import (
     REGISTRY_API_VERSION,
-    get_registry_mgmt_client,
 )
 from ...util.id_tools import parse_resource_id
 from .common import (
@@ -42,7 +42,6 @@ from .common import (
 )
 from .resources import Instances
 from .resources.instances import get_fc_name
-from ....constants import VERSION as CLI_VERSION
 
 
 class StateResourceKey(Enum):
@@ -52,8 +51,8 @@ class StateResourceKey(Enum):
     LISTENER = "listener"
     AUTHN = "authn"
     AUTHZ = "authz"
-    PROFILE = "profile"
-    ENDPOINT = "endpoint"
+    PROFILE = "dataflowProfile"
+    ENDPOINT = "dataflowEndpoint"
     DATAFLOW = "dataflow"
     ASSET = "asset"
     ASSET_ENDPOINT_PROFILE = "assetEndpointProfile"
@@ -70,7 +69,7 @@ class TemplateParams(Enum):
     SUBSCRIPTION = "subscription"
     RESOURCEGROUP = "resourceGroup"
     SCHEMA_REGISTRY_ID = "schemaRegistryId"
-    RESOURCE_SUFFIX = "resourceSuffix"
+    RESOURCE_SLUG = "resourceSlug"
 
 
 TEMPLATE_EXPRESSION_MAP = {
@@ -109,9 +108,19 @@ def get_resource_id_expr(rtype: str, resource_id: str, for_instance: bool = True
 
 
 def get_resource_id_by_parts(rtype: str, *args) -> str:
+    def _rem_first_last(s: str, c: str):
+        first = s.find(c)
+        last = s.rfind(c)
+        if first == -1 or first == last:
+            return s
+        return s[:first] + s[first + 1:last] + s[last + 1:]
+
     name_parts = ""
     for arg in args:
         name_parts += f", '{arg}'"
+    # TODO: very hacky
+    if "concat(" in name_parts:
+        name_parts = _rem_first_last(name_parts, "'")
     return f"[resourceId('{rtype}'{name_parts})]"
 
 
@@ -322,6 +331,7 @@ class BackupManager:
         )
 
         self.resource_map = self.instances.get_resource_map(self.instance_record)
+        self.resouce_graph = self.resource_map.connected_cluster.resource_graph
         self.rcontainer_map: Dict[str, ResourceContainer] = {}
         self.parameter_map: dict = {}
         self.variable_map: dict = {}
@@ -360,7 +370,7 @@ class BackupManager:
         self.parameter_map.update(build_parameter(name=TemplateParams.INSTANCE_NAME.value))
         self.parameter_map.update(
             build_parameter(
-                name=TemplateParams.RESOURCE_SUFFIX.value,
+                name=TemplateParams.RESOURCE_SLUG.value,
                 default=(
                     "[take(uniqueString(resourceGroup().id, "
                     "parameters('clusterName'), parameters('instanceName')), 5)]"
@@ -370,7 +380,7 @@ class BackupManager:
         self.parameter_map.update(
             build_parameter(
                 name=TemplateParams.CUSTOM_LOCATION_NAME.value,
-                default="[format('location-{0}', parameters('resourceSuffix'))]",
+                default="[format('location-{0}', parameters('resourceSlug'))]",
             )
         )
         self.parameter_map.update(
@@ -381,11 +391,21 @@ class BackupManager:
         )
 
     def _build_variables(self):
-        self.variable_map["aioExtName"] = "[format('azure-iot-operations-{0}', parameters('resourceSuffix'))]"
+        self.variable_map["aioExtName"] = "[format('azure-iot-operations-{0}', parameters('resourceSlug'))]"
 
     def _build_metadata(self):
         self.metadata_map["opsCliVersion"] = CLI_VERSION
         self.metadata_map["clonedInstanceId"] = self.instance_record["id"]
+
+    def get_resources_of_type(self, resource_type: str) -> List[dict]:
+        return self.resouce_graph.query_resources(
+            f"""
+            resources
+            | where extendedLocation.name =~ '{self.instance_record["extendedLocation"]["name"]}'
+            | where type =~ '{resource_type}'
+            | project id, name, type, location, extendedLocation, properties
+            """
+        )["data"]
 
     def _analyze_extensions(self):
         depends_on_map = {
@@ -591,19 +611,11 @@ class BackupManager:
             **build_parameter(name=TemplateParams.CUSTOM_LOCATION_NAME.value),
             **build_parameter(name=TemplateParams.INSTANCE_NAME.value),
         }
-        registry_client = get_registry_mgmt_client(
-            subscription_id=self.resource_map.subscription_id, api_version=REGISTRY_API_VERSION
-        )
         instance_resource_id_expr = get_resource_id_by_param(
             "microsoft.iotoperations/instances", TemplateParams.INSTANCE_NAME
         )
-        ext_loc_id = self.instance_record["extendedLocation"]["name"].lower()
-        asset_endpoints = list(
-            registry_client.asset_endpoint_profiles.list_by_resource_group(
-                resource_group_name=self.resource_group_name
-            )
-        )
-        asset_endpoints = [ep for ep in asset_endpoints if ep["extendedLocation"]["name"].lower() == ext_loc_id]
+
+        asset_endpoints = self.get_resources_of_type(resource_type="microsoft.deviceregistry/assetendpointprofiles")
         self._add_deployment(
             key=StateResourceKey.ASSET_ENDPOINT_PROFILE,
             api_version=REGISTRY_API_VERSION,
@@ -612,8 +624,7 @@ class BackupManager:
             parameters=nested_params,
         )
 
-        assets = list(registry_client.assets.list_by_resource_group(resource_group_name=self.resource_group_name))
-        assets = [asset for asset in assets if asset["extendedLocation"]["name"].lower() == ext_loc_id]
+        assets = self.get_resources_of_type(resource_type="microsoft.deviceregistry/assets")
         if assets and asset_endpoints:
             self._add_deployment(
                 key=StateResourceKey.ASSET,
@@ -715,12 +726,13 @@ class BackupManager:
                     },
                 )
 
-    def add_deployment_by_key(self, key: StateResourceKey) -> str:
+    def add_deployment_by_key(self, key: StateResourceKey) -> Tuple[str, str]:
         deployments_by_key = self.active_deployment.get(key, [])
-        new_deployment_name = f"{key.value}Deployment_{len(deployments_by_key)+1}"
-        deployments_by_key.append(new_deployment_name)
+        symbolic_name = f"{key.value}s_{len(deployments_by_key)+1}"
+        deployment_name = f"concat(parameters('resourceSlug'), '_{symbolic_name}')"
+        deployments_by_key.append(deployment_name)
         self.active_deployment[key] = deployments_by_key
-        return new_deployment_name
+        return symbolic_name, deployment_name
 
     def _add_deployment(
         self,
@@ -734,9 +746,9 @@ class BackupManager:
         if data_iter:
             chunked_list_data = chunk_list(data_iter, self.chunk_size)
             for chunk in chunked_list_data:
-                deployment_name = self.add_deployment_by_key(key)
+                symbolic_name, deployment_name = self.add_deployment_by_key(key)
                 deployment_container = DeploymentContainer(
-                    name=deployment_name,
+                    name=f"[{deployment_name}]",
                     depends_on=depends_on,
                     parameters=parameters,
                 )
@@ -745,7 +757,7 @@ class BackupManager:
                     api_version=api_version,
                     data_iter=chunk,
                 )
-                self.rcontainer_map[deployment_name] = deployment_container
+                self.rcontainer_map[symbolic_name] = deployment_container
 
     def _add_resource(
         self,
