@@ -113,7 +113,7 @@ def get_resource_id_by_parts(rtype: str, *args) -> str:
         last = s.rfind(c)
         if first == -1 or first == last:
             return s
-        return s[:first] + s[first + 1:last] + s[last + 1:]
+        return s[:first] + s[first + 1 : last] + s[last + 1 :]
 
     name_parts = ""
     for arg in args:
@@ -404,6 +404,16 @@ class BackupManager:
             | where extendedLocation.name =~ '{self.instance_record["extendedLocation"]["name"]}'
             | where type =~ '{resource_type}'
             | project id, name, type, location, extendedLocation, properties
+            """
+        )["data"]
+
+    def get_identities_by_client_id(self, client_ids: List[str]) -> List[dict]:
+        return self.resouce_graph.query_resources(
+            f"""
+            resources
+            | where type =~ "Microsoft.ManagedIdentity/userAssignedIdentities"
+            | where properties.clientId in~ ("{'"'.join(client_ids)})
+            | project id, name, type, properties
             """
         )["data"]
 
