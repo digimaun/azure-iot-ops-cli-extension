@@ -336,6 +336,7 @@ class BackupManager:
         self.parameter_map: dict = {}
         self.variable_map: dict = {}
         self.metadata_map: dict = {}
+        self.instance_identities: List[str] = []
         self.active_deployment: Dict[StateResourceKey, List[str]] = {}
         self.chunk_size = 800
 
@@ -412,7 +413,7 @@ class BackupManager:
             f"""
             resources
             | where type =~ "Microsoft.ManagedIdentity/userAssignedIdentities"
-            | where properties.clientId in~ ("{'"'.join(client_ids)})
+            | where properties.clientId in~ ("{'", "'.join(client_ids)}")
             | project id, name, type, properties
             """
         )["data"]
@@ -663,7 +664,11 @@ class BackupManager:
                 resource_group_name=self.resource_group_name
             )
         )
+
         ssc_spcs = [spc for spc in ssc_spcs if spc["extendedLocation"]["name"].lower() == ext_loc_id]
+        client_ids = [spc["properties"]["clientId"] for spc in ssc_spcs if "clientId" in spc["properties"]]
+        self.instance_identities.extend([mid["id"] for mid in self.get_identities_by_client_id(client_ids)])
+
         self._add_deployment(
             key=StateResourceKey.SSC_SPC,
             api_version=ssc_api_version,
