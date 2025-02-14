@@ -845,19 +845,25 @@ def load_iotops_arguments(self, _):
         context.argument(
             "to_instance_name",
             options_list=["--to-instance"],
-            help="The instance name clone restoration will be applied to. If omitted the "
+            help="The instance name that will be used when applying the clone. If omitted the "
             "clone instance name will be used.",
             arg_group="To Cluster",
         )
         context.argument(
             "to_cluster_name",
             options_list=["--to-cluster"],
-            help="The cluster the clone restoration will be applied to.",
+            help="The cluster the clone will be applied to.",
             arg_group="To Cluster",
         )
         context.argument(
             "to_resource_group_name",
             options_list=["--to-group"],
-            help="The cluster resource group the clone restoration will be applied to.",
+            help="The cluster resource group the clone will be applied to.",
+            arg_group="To Cluster",
+        )
+        context.argument(
+            "to_cluster_name",
+            options_list=["--to-cluster-d"],
+            help="The resource Id of the connected cluster the clone will be applied to.",
             arg_group="To Cluster",
         )

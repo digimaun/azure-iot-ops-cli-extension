@@ -34,6 +34,7 @@ from ...util.az_client import (
     REGISTRY_API_VERSION,
     wait_for_terminal_state,
     get_resource_client,
+    get_msi_mgmt_client,
 )
 from ...util.id_tools import parse_resource_id
 from .common import (
@@ -50,6 +51,7 @@ from .common import (
 )
 from .resources import Instances
 from .resources.instances import get_fc_name
+from .connected_cluster import ConnectedCluster
 
 DEFAULT_CONSOLE = Console()
 
@@ -321,18 +323,31 @@ class ResourceContainer:
 class InstanceRestore:
     def __init__(
         self,
+        cmd,
+        instances: Instances,
         from_instance_name: str,
         cluster_resource_id: str,
-        template_content: dict,
+        template_content: "TemplateContent",
+        user_assigned_mis: Optional[List[str]] = None,
         no_progress: Optional[bool] = None,
     ):
+        self.cmd = cmd
+        self.instances = instances
         self.template_content = template_content
         self.from_instance_name = from_instance_name
         self.parsed_cluster_id = parse_resource_id(cluster_resource_id)
         self.cluster_name = self.parsed_cluster_id["name"]
         self.resource_group_name = self.parsed_cluster_id["resource_group"]
         self.subscription_id = self.parsed_cluster_id["subscription"]
+        self.connected_cluster = ConnectedCluster(
+            cmd=self.cmd,
+            subscription_id=self.subscription_id,
+            cluster_name=self.cluster_name,
+            resource_group_name=self.resource_group_name,
+        )
         self.resource_client = get_resource_client(subscription_id=self.subscription_id)
+        self.msi_client = get_msi_mgmt_client(subscription_id=self.subscription_id)
+        self.user_assigned_mis = user_assigned_mis
         self.no_progress = no_progress
 
     def _deploy_template(
@@ -342,7 +357,7 @@ class InstanceRestore:
         what_if: bool = False,
     ) -> Optional["LROPoller"]:
         deployment_params = {
-            "properties": {"mode": "Incremental", "template": self.template_content, "parameters": parameters}
+            "properties": {"mode": "Incremental", "template": self.template_content.content, "parameters": parameters}
         }
         if what_if:
             what_if_poller = self.resource_client.deployments.begin_what_if(
@@ -364,7 +379,54 @@ class InstanceRestore:
             parameters=deployment_params,
         )
 
-    def deploy(self, instance_name: Optional[str] = None):
+    def _handle_federation(self, use_self_hosted_issuer: Optional[bool] = None):
+        if not self.user_assigned_mis:
+            return
+        cluster_resource = self.connected_cluster.resource
+        oidc_issuer = self.instances._ensure_oidc_issuer(
+            cluster_resource, use_self_hosted_issuer=use_self_hosted_issuer
+        )
+
+        for i in range(len(self.user_assigned_mis)):
+            resource_id = parse_resource_id(self.user_assigned_mis[i])
+            credentials = list(
+                self.msi_client.federated_identity_credentials.list(
+                    resource_group_name=resource_id["resource_group"], resource_name=resource_id["name"]
+                )
+            )
+            filtered_creds = []
+            for cred in credentials:
+                if cred["properties"]["issuer"] != oidc_issuer:
+                    filtered_creds.append(cred)
+
+            for cred in filtered_creds:
+                if ":aio-" not in cred["properties"]["subject"]:
+                    continue
+
+                self.msi_client.federated_identity_credentials.create_or_update(
+                    resource_group_name=resource_id["resource_group"],
+                    resource_name=resource_id["name"],
+                    federated_identity_credential_resource_name=get_fc_name(
+                        cluster_name=self.cluster_name,
+                        oidc_issuer=oidc_issuer,
+                        subject=cred["properties"]["subject"],
+                    ),
+                    parameters={
+                        "properties": {
+                            "subject": cred["properties"]["subject"],
+                            "audiences": cred["properties"]["audiences"],
+                            "issuer": oidc_issuer,
+                        }
+                    },
+                )
+
+    def deploy(
+        self,
+        instance_name: Optional[str] = None,
+        use_self_hosted_issuer: Optional[bool] = None,
+    ):
+        self._handle_federation(use_self_hosted_issuer)
+
         parameters = {
             "clusterName": {"value": self.cluster_name},
         }
@@ -377,11 +439,10 @@ class InstanceRestore:
             "Elapsed:",
             TimeElapsedColumn(),
             transient=True,
-            # disable=bool(self.no_progress),
-            disable=True,
+            disable=bool(self.no_progress),
+            # disable=True,
         ) as progress:
-            # TODO cloning to?
-            _ = progress.add_task("Cloning to...", total=None)
+            _ = progress.add_task(f"Cloning to {self.cluster_name}...", total=None)
             self._deploy_template(
                 parameters=parameters,
                 deployment_name=default_bundle_name(self.from_instance_name, file_ext=None),
@@ -411,10 +472,12 @@ def backup_ops_instance(
     )
     bundle_path = get_bundle_path(instance_name, bundle_dir=to_dir)
 
-    backup_state = backup_manager.analyze_cluster(to_cluster_id)
+    backup_state = backup_manager.analyze_cluster()
 
     if not no_progress:
-        render_upgrade_table(backup_state, bundle_path, detailed=summary_mode == SummaryMode.DETAILED.value)
+        render_upgrade_table(
+            backup_state, bundle_path, to_cluster_id, detailed=summary_mode == SummaryMode.DETAILED.value
+        )
 
     if all([not to_dir, not to_cluster_id]):
         return
@@ -426,14 +489,15 @@ def backup_ops_instance(
     template_content = backup_state.get_content()
     template_content.write(bundle_path)
 
-    if backup_state.to_cluster_id:
-        restore_client = backup_state.get_restore_client(no_progress=no_progress)
-        restore_client.deploy(instance_name=to_instance_name)
+    if to_cluster_id:
+        restore_client = backup_state.get_restore_client(to_cluster_id=to_cluster_id, no_progress=no_progress)
+        restore_client.deploy(instance_name=to_instance_name, use_self_hosted_issuer=use_self_hosted_issuer)
 
 
 def render_upgrade_table(
     backup_state: "BackupState",
     bundle_path: Optional[str] = None,
+    to_cluster_id: Optional[str] = None,
     detailed: bool = False,
 ):
     table = get_default_table(include_name=detailed)
@@ -450,12 +514,13 @@ def render_upgrade_table(
     if bundle_path:
         DEFAULT_CONSOLE.print(f"State will be saved to:\n-> {bundle_path}\n")
 
-    if backup_state.to_cluster_id:
+    if to_cluster_id:
+        parsed_to_cluster_id = parse_resource_id(to_cluster_id)
         DEFAULT_CONSOLE.print(
             f"State will be cloned to connected cluster:\n"
-            f"* Name: {backup_state.parsed_to_cluster_id['name']}\n"
-            f"* Resource Group: {backup_state.parsed_to_cluster_id['resource_group']}\n"
-            f"* Subscription: {backup_state.parsed_to_cluster_id['subscription']}\n",
+            f"* Name: {parsed_to_cluster_id['name']}\n"
+            f"* Resource Group: {parsed_to_cluster_id['resource_group']}\n"
+            f"* Subscription: {parsed_to_cluster_id['subscription']}\n",
             highlight=False,
         )
 
@@ -478,25 +543,35 @@ def get_default_table(include_name: bool = False) -> Table:
 
 class BackupState:
     def __init__(
-        self, instance: dict, resources: dict, template_gen: "TemplateGen", to_cluster_id: Optional[str] = None
+        self,
+        cmd,
+        instance: dict,
+        instances: Instances,
+        resources: dict,
+        template_gen: "TemplateGen",
+        user_assigned_mis: Optional[List[str]] = None,
     ):
+        self.cmd = cmd
         self.instance = instance
+        self.instances = instances
         self.resources = resources
         self.template_gen = template_gen
-        self.to_cluster_id = to_cluster_id
-        self.parsed_to_cluster_id = parse_resource_id(to_cluster_id)
+        self.content = self.template_gen.get_content()
+        self.user_assigned_mis = user_assigned_mis
 
     def get_content(self) -> "TemplateContent":
-        return self.template_gen.get_content()
+        return self.content
 
-    def get_restore_client(self, no_progress: Optional[bool] = None) -> "InstanceRestore":
-        if self.to_cluster_id:
-            InstanceRestore(
-                from_instance_name=self.instance["name"],
-                cluster_resource_id=self.to_cluster_id,
-                template_content=self.get_content(),
-                no_progress=no_progress,
-            )
+    def get_restore_client(self, to_cluster_id: str, no_progress: Optional[bool] = None) -> "InstanceRestore":
+        return InstanceRestore(
+            cmd=self.cmd,
+            instances=self.instances,
+            from_instance_name=self.instance["name"],
+            cluster_resource_id=to_cluster_id,
+            template_content=self.content,
+            user_assigned_mis=self.user_assigned_mis,
+            no_progress=no_progress,
+        )
 
 
 class BackupManager:
@@ -528,17 +603,17 @@ class BackupManager:
         self.active_deployment: Dict[StateResourceKey, List[str]] = {}
         self.chunk_size = 800
 
-    def analyze_cluster(self, to_cluster_id: Optional[str] = None) -> "BackupState":
+    def analyze_cluster(self) -> "BackupState":
         with Progress(
             SpinnerColumn("star"),
             *Progress.get_default_columns(),
             "Elapsed:",
             TimeElapsedColumn(),
             transient=True,
-            # disable=bool(self.no_progress),
-            disable=True,
+            disable=bool(self.no_progress),
+            # disable=True,
         ) as progress:
-            _ = progress.add_task("Analyzing cluster...", total=None)
+            _ = progress.add_task(f"Analyzing instance {self.instance_name}...", total=None)
             self._build_parameters(self.instance_record)
             self._build_variables()
             self._build_metadata()
@@ -551,12 +626,14 @@ class BackupManager:
             self._analyze_assets()
 
             return BackupState(
+                cmd=self.cmd,
                 instance=self.instance_record,
+                instances=self.instances,
                 resources=self._enumerate_resources(),
                 template_gen=TemplateGen(
                     self.rcontainer_map, self.parameter_map, self.variable_map, self.metadata_map
                 ),
-                to_cluster_id=to_cluster_id,
+                user_assigned_mis=self.instance_identities,
             )
 
     def _enumerate_resources(self):
@@ -915,49 +992,8 @@ class BackupManager:
             )
 
     def _analyze_instance_identity(self):
-        if not self.oidc_issuer:
-            return
-
-        uami_ids = []
         identity: dict = self.instance_record.get("identity", {}).get("userAssignedIdentities", {})
-        uami_ids.extend(list(identity.keys()))
-
-        if not uami_ids:
-            return
-
-        msi_client = self.instances.msi_mgmt_client
-        for i in range(len(uami_ids)):
-            resource_id = parse_resource_id(uami_ids[i])
-            credentials = list(
-                msi_client.federated_identity_credentials.list(
-                    resource_group_name=resource_id["resource_group"], resource_name=resource_id["name"]
-                )
-            )
-            filtered_creds = []
-            for cred in credentials:
-                if cred["properties"]["issuer"] != self.oidc_issuer:
-                    filtered_creds.append(cred)
-
-            for cred in filtered_creds:
-                if ":aio-" not in cred["properties"]["subject"]:
-                    continue
-
-                msi_client.federated_identity_credentials.create_or_update(
-                    resource_group_name=resource_id["resource_group"],
-                    resource_name=resource_id["name"],
-                    federated_identity_credential_resource_name=get_fc_name(
-                        cluster_name=self.oidc_issuer,
-                        oidc_issuer=self.oidc_issuer,
-                        subject=cred["properties"]["subject"],
-                    ),
-                    parameters={
-                        "properties": {
-                            "subject": cred["properties"]["subject"],
-                            "audiences": cred["properties"]["audiences"],
-                            "issuer": self.oidc_issuer,
-                        }
-                    },
-                )
+        self.instance_identities.extend(list(identity.keys()))
 
     def add_deployment_by_key(self, key: StateResourceKey) -> Tuple[str, str]:
         deployments_by_key = self.active_deployment.get(key, [])
