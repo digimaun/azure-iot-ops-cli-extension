@@ -36,7 +36,7 @@ from .providers.orchestration.common import (
     SchemaType,
     ConfigSyncModeType,
 )
-from .providers.orchestration.backup import SummaryMode
+from .providers.orchestration.backup import SummaryMode, TemplateMode
 
 
 def load_iotops_arguments(self, _):
@@ -812,10 +812,52 @@ def load_iotops_arguments(self, _):
             arg_group=None,
         )
 
-    with self.argument_context("iot ops backup") as context:
+    with self.argument_context("iot ops clone") as context:
         context.argument(
             "summary_mode",
             options_list=["--summary"],
             arg_type=get_enum_type(SummaryMode, default=SummaryMode.SIMPLE.value),
-            help="Deployment summary mode.",
+            help="Deployment summary option.",
+        )
+        context.argument(
+            "instance_name",
+            options_list=["--from-instance"],
+            help="The model instance to clone.",
+        )
+        context.argument(
+            "resource_group_name",
+            options_list=["--from-group"],
+            help="The resource group the model instance to clone resides in.",
+        )
+        context.argument(
+            "to_dir",
+            options_list=["--to-dir"],
+            help="The local directory the instance clone definitions will be stored in.",
+            arg_group="To Local",
+        )
+        context.argument(
+            "template_mode",
+            options_list=["--mode"],
+            arg_type=get_enum_type(TemplateMode, default=TemplateMode.NESTED.value),
+            help="Applicable if --to-dir is selected.",
+            arg_group="To Local",
+        )
+        context.argument(
+            "to_instance_name",
+            options_list=["--to-instance"],
+            help="The instance name clone restoration will be applied to. If omitted the "
+            "clone instance name will be used.",
+            arg_group="To Cluster",
+        )
+        context.argument(
+            "to_cluster_name",
+            options_list=["--to-cluster"],
+            help="The cluster the clone restoration will be applied to.",
+            arg_group="To Cluster",
+        )
+        context.argument(
+            "to_resource_group_name",
+            options_list=["--to-group"],
+            help="The cluster resource group the clone restoration will be applied to.",
+            arg_group="To Cluster",
         )

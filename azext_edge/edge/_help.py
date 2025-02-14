@@ -1678,3 +1678,18 @@ def load_iotops_help():
           text: >
             az iot ops schema show-dataflow-refs --registry myregistry -g myresourcegroup --latest
     """
+
+    helps[
+        "iot ops clone"
+    ] = """
+        type: command
+        short-summary: Clone an instance.
+        examples:
+        - name: Clone an instance to a desired cluster.
+          text: >
+            az iot ops clone --from-instance myinstance --from-group mygroup
+            --to-cluster desiredcluster --to-group desiredgroup
+        - name: Clone an instance to a local directory.
+          text: >
+            az iot ops clone --from-instance myinstance --from-group mygroup --to-dir .
+    """

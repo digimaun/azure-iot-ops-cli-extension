@@ -7,10 +7,10 @@
 from enum import Enum
 from json import dumps
 from pathlib import PurePath
-from typing import Any, Dict, Iterable, List, Optional, Set, Tuple, Union
+from typing import TYPE_CHECKING, Any, Dict, Iterable, List, Optional, Set, Tuple, Union
 from uuid import uuid4
 
-from azure.cli.core.azclierror import ValidationError
+from azure.cli.core.azclierror import AzureResponseError, ValidationError
 from knack.log import get_logger
 from packaging import version
 from rich.console import Console
@@ -24,9 +24,16 @@ from rich.progress import (
 from rich.table import Table, box
 
 from ....constants import VERSION as CLI_VERSION
-from ...util import chunk_list, get_timestamp_now_utc, should_continue_prompt, to_safe_filename
+from ...util import (
+    chunk_list,
+    get_timestamp_now_utc,
+    should_continue_prompt,
+    to_safe_filename,
+)
 from ...util.az_client import (
     REGISTRY_API_VERSION,
+    wait_for_terminal_state,
+    get_resource_client,
 )
 from ...util.id_tools import parse_resource_id
 from .common import (
@@ -39,16 +46,25 @@ from .common import (
     EXTENSION_TYPE_SSC,
     EXTENSION_TYPE_TO_MONIKER_MAP,
     OPS_EXTENSION_DEPS,
+    PROVISIONING_STATE_SUCCESS,
 )
 from .resources import Instances
 from .resources.instances import get_fc_name
 
 DEFAULT_CONSOLE = Console()
 
+if TYPE_CHECKING:
+    from azure.core.polling import LROPoller
+
 
 class SummaryMode(Enum):
     SIMPLE = "simple"
     DETAILED = "detailed"
+
+
+class TemplateMode(Enum):
+    NESTED = "nested"
+    LINKED = "linked"
 
 
 class StateResourceKey(Enum):
@@ -291,13 +307,85 @@ class ResourceContainer:
         return result
 
 
+# TODO
+# Create a deployment for every distinct UAMI subscription and resource group
+# The deployment resources should reference the existing UAMI(s), then have child resources that federate credentaials
+# oidc parameter can be plumbed that has two choices, system or selfHosted
+# should I just do "az iot ops clone --from-instance --from-group --to-cluster --to-group [--to-instance] --federate --self-hosted-issuer"
+#
+# "az iot ops clone
+# --from-instance --from-group "
+# --to-cluster --to-group [--to-instance (use default instance name if not provided)]
+# (--federate automatically if any managed id) --self-hosted-issuer
+# --to-dir
+# --mode nested || linked (only applicable if --to-dir)
+#
+# linked template, changed templateLink: {relativePath: children/nestedChild.json}
+
+
+class InstanceRestore:
+    def __init__(self, subscription_id: str, resource_group_name: str, template_content: dict):
+        self.template_content = template_content
+        self.resource_group_name = resource_group_name
+        self.resource_client = get_resource_client(subscription_id=subscription_id)
+
+    def _deploy_template(
+        self,
+        parameters: dict,
+        deployment_name: str,
+        what_if: bool = False,
+    ) -> Optional["LROPoller"]:
+        deployment_params = {
+            "properties": {"mode": "Incremental", "template": self.template_content, "parameters": parameters}
+        }
+        if what_if:
+            what_if_poller = self.resource_client.deployments.begin_what_if(
+                resource_group_name=self.resource_group_name,
+                deployment_name=deployment_name,
+                parameters=deployment_params,
+            )
+            terminal_what_if_deployment = wait_for_terminal_state(what_if_poller)
+            if (
+                "status" in terminal_what_if_deployment
+                and terminal_what_if_deployment["status"].lower() != PROVISIONING_STATE_SUCCESS.lower()
+            ):
+                raise AzureResponseError(dumps(terminal_what_if_deployment, indent=2))
+            return
+
+        return self.resource_client.deployments.begin_create_or_update(
+            resource_group_name=self.resource_group_name,
+            deployment_name=deployment_name,
+            parameters=deployment_params,
+        )
+
+    def deploy(
+        self, parameters: dict, deployment_name: str, what_if: bool = False, no_progress: Optional[bool] = None
+    ):
+        with Progress(
+            SpinnerColumn("star"),
+            *Progress.get_default_columns(),
+            "Elapsed:",
+            TimeElapsedColumn(),
+            transient=True,
+            # disable=bool(self.no_progress),
+            disable=True,
+        ) as progress:
+            # TODO cloning to?
+            _ = progress.add_task("Cloning to...", total=None)
+            self._deploy_template(parameters=parameters, deployment_name=deployment_name, what_if=True)
+
+
 def backup_ops_instance(
     cmd,
-    resource_group_name: str,
     instance_name: str,
+    resource_group_name: str,
     summary_mode: Optional[str] = None,
-    oidc_issuer: Optional[str] = None,
-    bundle_dir: Optional[str] = None,
+    to_dir: Optional[str] = None,
+    template_mode: Optional[str] = None,
+    to_instance_name: Optional[str] = None,
+    to_cluster_name: Optional[str] = None,
+    to_resource_group_name: Optional[str] = None,
+    use_self_hosted_issuer: Optional[bool] = None,
     no_progress: Optional[bool] = None,
     confirm_yes: Optional[bool] = None,
     **kwargs,
@@ -305,39 +393,41 @@ def backup_ops_instance(
     backup_manager = BackupManager(
         cmd=cmd,
         instance_name=instance_name,
-        oidc_issuer=oidc_issuer,
         resource_group_name=resource_group_name,
         no_progress=no_progress,
     )
-    bundle_path = get_bundle_path(instance_name, bundle_dir=bundle_dir)
+    bundle_path = get_bundle_path(instance_name, bundle_dir=to_dir)
 
-    backup_manager.analyze_cluster(**kwargs)
+    backup_state = backup_manager.analyze_cluster(**kwargs)
 
     if not no_progress:
-        enumerated_resources = backup_manager.enumerate_resources()
-        render_upgrade_table(
-            instance_name, bundle_path, enumerated_resources, detailed=summary_mode == SummaryMode.DETAILED.value
-        )
+        render_upgrade_table(backup_state, bundle_path, detailed=summary_mode == SummaryMode.DETAILED.value)
 
-    should_bail = not should_continue_prompt(confirm_yes=confirm_yes, context="Backup")
+    if all([not to_dir, not to_cluster_name, not to_resource_group_name]):
+        return
+
+    should_bail = not should_continue_prompt(confirm_yes=confirm_yes, context="Clone")
     if should_bail:
         return
 
-    backup_manager.output_template(bundle_path=bundle_path)
+    template_content = backup_state.get_content()
+    template_content.write(bundle_path)
 
 
-def render_upgrade_table(instance_name: str, bundle_path: str, resources: Dict[str, dict], detailed: bool = False):
+def render_upgrade_table(backup_state: "BackupState", bundle_path: Optional[str] = None, detailed: bool = False):
     table = get_default_table(include_name=detailed)
-    table.title += f" of {instance_name}"
-    for rtype in resources:
-        row_content = [f"{rtype}", f"{len(resources[rtype])}"]
+    table.title += f" of {backup_state.instance['name']}"
+    for rtype in backup_state.resources:
+        row_content = [f"{rtype}", f"{len(backup_state.resources[rtype])}"]
         if detailed:
-            row_content.append("\n".join([r["resource_name"] for r in resources[rtype]]))
+            row_content.append("\n".join([r["resource_name"] for r in backup_state.resources[rtype]]))
 
         table.add_row(*row_content)
 
     DEFAULT_CONSOLE.print(table)
-    DEFAULT_CONSOLE.print(f"State will be saved to:\n-> {bundle_path}\n")
+
+    if bundle_path:
+        DEFAULT_CONSOLE.print(f"State will be saved to:\n-> {bundle_path}\n")
 
 
 def get_default_table(include_name: bool = False) -> Table:
@@ -354,6 +444,20 @@ def get_default_table(include_name: bool = False) -> Table:
         table.add_column("Name")
 
     return table
+
+
+class BackupState:
+    def __init__(self, instance: dict, resources: dict, template_gen: "TemplateGen"):
+        self.instance = instance
+        self.resources = resources
+        self.template_gen = template_gen
+
+    def get_content(self) -> "TemplateContent":
+        return self.template_gen.get_content()
+
+    @property
+    def instance_id_parts(self):
+        return parse_resource_id(self.instance["id"])
 
 
 class BackupManager:
@@ -385,7 +489,7 @@ class BackupManager:
         self.active_deployment: Dict[StateResourceKey, List[str]] = {}
         self.chunk_size = 800
 
-    def analyze_cluster(self):
+    def analyze_cluster(self) -> "BackupState":
         with Progress(
             SpinnerColumn("star"),
             *Progress.get_default_columns(),
@@ -407,7 +511,15 @@ class BackupManager:
             self._analyze_secretsync()
             self._analyze_assets()
 
-    def enumerate_resources(self):
+            return BackupState(
+                instance=self.instance_record,
+                resources=self._enumerate_resources(),
+                template_gen=TemplateGen(
+                    self.rcontainer_map, self.parameter_map, self.variable_map, self.metadata_map
+                ),
+            )
+
+    def _enumerate_resources(self):
         enumerated_map: dict = {}
 
         def __enumerator(rcontainer_map: Dict[str, ResourceContainer]):
@@ -417,9 +529,6 @@ class BackupManager:
                     if "id" not in target_rcontainer.resource_state:
                         continue
                     parsed_id = parse_resource_id(target_rcontainer.resource_state["id"])
-                    # if "instances" in parsed_id["type"]:
-                    #     import pdb; pdb.set_trace()
-                    #     pass
                     key = f"{parsed_id['namespace']}/{parsed_id['type']}"
                     if "resource_type" in parsed_id and parsed_id["resource_type"] != parsed_id["type"]:
                         key += f"/{parsed_id['resource_type']}"
@@ -433,13 +542,11 @@ class BackupManager:
         __enumerator(self.rcontainer_map)
         return enumerated_map
 
-    def output_template(self, bundle_path: str):
-        template_gen = TemplateGen(self.rcontainer_map, self.parameter_map, self.variable_map, self.metadata_map)
-        template_gen.write(bundle_path=bundle_path)
-
     def _build_parameters(self, instance: dict):
         self.parameter_map.update(build_parameter(name=TemplateParams.CLUSTER_NAME.value))
-        self.parameter_map.update(build_parameter(name=TemplateParams.INSTANCE_NAME.value))
+        self.parameter_map.update(
+            build_parameter(name=TemplateParams.INSTANCE_NAME.value, default=self.instance_record["name"])
+        )
         self.parameter_map.update(
             build_parameter(
                 name=TemplateParams.RESOURCE_SLUG.value,
@@ -865,6 +972,19 @@ class BackupManager:
         )
 
 
+class TemplateContent:
+    def __init__(self, content: dict):
+        self.content = content
+
+    def write(self, bundle_path: str):
+        if not bundle_path:
+            return
+
+        template_str = dumps(self.content, indent=2)
+        with open(file=bundle_path, mode="w") as template_file:
+            template_file.write(template_str)
+
+
 class TemplateGen:
     def __init__(
         self, rcontainer_map: Dict[str, ResourceContainer], parameter_map: dict, variable_map: dict, metadata_map: dict
@@ -882,7 +1002,7 @@ class TemplateGen:
             result[key] = template[key]
         return result
 
-    def _build_contents(self) -> str:
+    def get_content(self) -> "TemplateContent":
         template = self.get_base_format()
         for template_key in self.rcontainer_map:
             template["resources"][template_key] = self.rcontainer_map[template_key].get()
@@ -890,12 +1010,7 @@ class TemplateGen:
         template["variables"].update(self.variable_map)
         template["metadata"].update(self.metadata_map)
         template = self._prune_template_keys(template)
-        return dumps(template, indent=2)
-
-    def write(self, bundle_path: str):
-        content = self._build_contents()
-        with open(file=bundle_path, mode="w") as template_file:
-            template_file.write(content)
+        return TemplateContent(content=template)
 
     def get_base_format(self) -> dict:
         return {
@@ -936,8 +1051,11 @@ def process_depends_on(
     return result
 
 
-def get_bundle_path(instance_name: str, bundle_dir: Optional[str] = None) -> PurePath:
+def get_bundle_path(instance_name: str, bundle_dir: Optional[str] = None) -> Optional[PurePath]:
     from ...util import normalize_dir
+
+    if not bundle_dir:
+        return
 
     bundle_dir_pure_path = normalize_dir(bundle_dir)
     bundle_pure_path = bundle_dir_pure_path.joinpath(default_bundle_name(instance_name))

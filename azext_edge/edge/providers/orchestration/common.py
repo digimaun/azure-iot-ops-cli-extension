@@ -21,6 +21,8 @@ EXTENDED_LOCATION_ROLE_BINDING = "AzureArc-Microsoft.ExtendedLocation-RP-RoleBin
 ARC_CONFIG_MAP = "azure-clusterconfig"
 ARC_NAMESPACE = "azure-arc"
 
+PROVISIONING_STATE_SUCCESS = "Succeeded"
+
 # Key Vault KPIs
 KEYVAULT_CLOUD_API_VERSION = "2022-07-01"
 
