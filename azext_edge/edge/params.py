@@ -36,6 +36,7 @@ from .providers.orchestration.common import (
     SchemaType,
     ConfigSyncModeType,
 )
+from .providers.orchestration.backup import SummaryMode
 
 
 def load_iotops_arguments(self, _):
@@ -809,4 +810,12 @@ def load_iotops_arguments(self, _):
             options_list=["--content"],
             help="File path containing or inline content for the version.",
             arg_group=None,
+        )
+
+    with self.argument_context("iot ops backup") as context:
+        context.argument(
+            "summary_mode",
+            options_list=["--summary"],
+            arg_type=get_enum_type(SummaryMode, default=SummaryMode.SIMPLE.value),
+            help="Deployment summary mode.",
         )

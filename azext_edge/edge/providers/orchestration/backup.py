@@ -24,7 +24,7 @@ from rich.progress import (
 from rich.table import Table, box
 
 from ....constants import VERSION as CLI_VERSION
-from ...util import chunk_list, get_timestamp_now_utc, should_continue_prompt
+from ...util import chunk_list, get_timestamp_now_utc, should_continue_prompt, to_safe_filename
 from ...util.az_client import (
     REGISTRY_API_VERSION,
 )
@@ -42,6 +42,13 @@ from .common import (
 )
 from .resources import Instances
 from .resources.instances import get_fc_name
+
+DEFAULT_CONSOLE = Console()
+
+
+class SummaryMode(Enum):
+    SIMPLE = "simple"
+    DETAILED = "detailed"
 
 
 class StateResourceKey(Enum):
@@ -288,6 +295,7 @@ def backup_ops_instance(
     cmd,
     resource_group_name: str,
     instance_name: str,
+    summary_mode: Optional[str] = None,
     oidc_issuer: Optional[str] = None,
     bundle_dir: Optional[str] = None,
     no_progress: Optional[bool] = None,
@@ -301,14 +309,51 @@ def backup_ops_instance(
         resource_group_name=resource_group_name,
         no_progress=no_progress,
     )
+    bundle_path = get_bundle_path(instance_name, bundle_dir=bundle_dir)
 
     backup_manager.analyze_cluster(**kwargs)
+
+    if not no_progress:
+        enumerated_resources = backup_manager.enumerate_resources()
+        render_upgrade_table(
+            instance_name, bundle_path, enumerated_resources, detailed=summary_mode == SummaryMode.DETAILED.value
+        )
 
     should_bail = not should_continue_prompt(confirm_yes=confirm_yes, context="Backup")
     if should_bail:
         return
 
-    backup_manager.output_template(bundle_dir=bundle_dir)
+    backup_manager.output_template(bundle_path=bundle_path)
+
+
+def render_upgrade_table(instance_name: str, bundle_path: str, resources: Dict[str, dict], detailed: bool = False):
+    table = get_default_table(include_name=detailed)
+    table.title += f" of {instance_name}"
+    for rtype in resources:
+        row_content = [f"{rtype}", f"{len(resources[rtype])}"]
+        if detailed:
+            row_content.append("\n".join([r["resource_name"] for r in resources[rtype]]))
+
+        table.add_row(*row_content)
+
+    DEFAULT_CONSOLE.print(table)
+    DEFAULT_CONSOLE.print(f"State will be saved to:\n-> {bundle_path}\n")
+
+
+def get_default_table(include_name: bool = False) -> Table:
+    table = Table(
+        box=box.MINIMAL,
+        expand=False,
+        title="Capture",
+        min_width=79,
+        show_footer=True,
+    )
+    table.add_column("Resource Type")
+    table.add_column("#")
+    if include_name:
+        table.add_column("Name")
+
+    return table
 
 
 class BackupManager:
@@ -359,12 +404,38 @@ class BackupManager:
             self._analyze_instance()
             self._analyze_instance_identity()
             self._analyze_instance_resources()
-            self._analyze_assets()
             self._analyze_secretsync()
+            self._analyze_assets()
 
-    def output_template(self, bundle_dir: Optional[str] = None):
+    def enumerate_resources(self):
+        enumerated_map: dict = {}
+
+        def __enumerator(rcontainer_map: Dict[str, ResourceContainer]):
+            for resource in rcontainer_map:
+                target_rcontainer = rcontainer_map[resource]
+                if isinstance(target_rcontainer, ResourceContainer):
+                    if "id" not in target_rcontainer.resource_state:
+                        continue
+                    parsed_id = parse_resource_id(target_rcontainer.resource_state["id"])
+                    # if "instances" in parsed_id["type"]:
+                    #     import pdb; pdb.set_trace()
+                    #     pass
+                    key = f"{parsed_id['namespace']}/{parsed_id['type']}"
+                    if "resource_type" in parsed_id and parsed_id["resource_type"] != parsed_id["type"]:
+                        key += f"/{parsed_id['resource_type']}"
+
+                    items: list = enumerated_map.get(key, [])
+                    items.append(parsed_id)
+                    enumerated_map[key] = items
+                if isinstance(target_rcontainer, DeploymentContainer):
+                    __enumerator(target_rcontainer.rcontainer_map)
+
+        __enumerator(self.rcontainer_map)
+        return enumerated_map
+
+    def output_template(self, bundle_path: str):
         template_gen = TemplateGen(self.rcontainer_map, self.parameter_map, self.variable_map, self.metadata_map)
-        template_gen.write(bundle_dir=bundle_dir)
+        template_gen.write(bundle_path=bundle_path)
 
     def _build_parameters(self, instance: dict):
         self.parameter_map.update(build_parameter(name=TemplateParams.CLUSTER_NAME.value))
@@ -821,10 +892,8 @@ class TemplateGen:
         template = self._prune_template_keys(template)
         return dumps(template, indent=2)
 
-    def write(self, bundle_dir: Optional[str] = None):
+    def write(self, bundle_path: str):
         content = self._build_contents()
-
-        bundle_path = get_bundle_path(bundle_dir=bundle_dir)
         with open(file=bundle_path, mode="w") as template_file:
             template_file.write(content)
 
@@ -867,17 +936,17 @@ def process_depends_on(
     return result
 
 
-def get_bundle_path(bundle_dir: Optional[str] = None, system_name: str = "aio") -> PurePath:
+def get_bundle_path(instance_name: str, bundle_dir: Optional[str] = None) -> PurePath:
     from ...util import normalize_dir
 
     bundle_dir_pure_path = normalize_dir(bundle_dir)
-    bundle_pure_path = bundle_dir_pure_path.joinpath(default_bundle_name(system_name))
+    bundle_pure_path = bundle_dir_pure_path.joinpath(default_bundle_name(instance_name))
     return bundle_pure_path
 
 
-def default_bundle_name(system_name: str) -> str:
+def default_bundle_name(instance_name: str) -> str:
     timestamp = get_timestamp_now_utc(format="%Y%m%dT%H%M%S")
-    return f"backup_{timestamp}_{system_name}.json"
+    return f"clone_{to_safe_filename(instance_name)}_{timestamp}_aio.json"
 
 
 def build_parameter(name: str, type: str = "string", metadata: Optional[dict] = None, default: Any = None) -> dict:

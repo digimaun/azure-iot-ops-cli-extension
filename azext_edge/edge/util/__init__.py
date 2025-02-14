@@ -17,6 +17,7 @@ from .common import (
     should_continue_prompt,
     url_safe_hash_phrase,
     url_safe_random_chars,
+    to_safe_filename,
 )
 from .file_operations import (
     deserialize_file_content,
@@ -44,4 +45,5 @@ __all__ = [
     "url_safe_hash_phrase",
     "url_safe_random_chars",
     "should_continue_prompt",
+    "to_safe_filename",
 ]

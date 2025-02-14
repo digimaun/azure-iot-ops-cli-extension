@@ -236,3 +236,9 @@ def chunk_list(initial: list, chunk_size: int) -> List[list]:
         result.append(temp)
 
     return result
+
+
+def to_safe_filename(name: str) -> str:
+    import re
+
+    return re.sub(r"[^\w\-.]", "_", name).strip(".")
