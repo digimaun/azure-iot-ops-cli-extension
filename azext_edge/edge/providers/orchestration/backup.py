@@ -308,11 +308,6 @@ class ResourceContainer:
 
 
 # TODO
-# Create a deployment for every distinct UAMI subscription and resource group
-# The deployment resources should reference the existing UAMI(s), then have child resources that federate credentaials
-# oidc parameter can be plumbed that has two choices, system or selfHosted
-# should I just do "az iot ops clone --from-instance --from-group --to-cluster --to-group [--to-instance] --federate --self-hosted-issuer"
-#
 # "az iot ops clone
 # --from-instance --from-group "
 # --to-cluster --to-group [--to-instance (use default instance name if not provided)]
@@ -324,10 +319,21 @@ class ResourceContainer:
 
 
 class InstanceRestore:
-    def __init__(self, subscription_id: str, resource_group_name: str, template_content: dict):
+    def __init__(
+        self,
+        from_instance_name: str,
+        cluster_resource_id: str,
+        template_content: dict,
+        no_progress: Optional[bool] = None,
+    ):
         self.template_content = template_content
-        self.resource_group_name = resource_group_name
-        self.resource_client = get_resource_client(subscription_id=subscription_id)
+        self.from_instance_name = from_instance_name
+        self.parsed_cluster_id = parse_resource_id(cluster_resource_id)
+        self.cluster_name = self.parsed_cluster_id["name"]
+        self.resource_group_name = self.parsed_cluster_id["resource_group"]
+        self.subscription_id = self.parsed_cluster_id["subscription"]
+        self.resource_client = get_resource_client(subscription_id=self.subscription_id)
+        self.no_progress = no_progress
 
     def _deploy_template(
         self,
@@ -358,9 +364,13 @@ class InstanceRestore:
             parameters=deployment_params,
         )
 
-    def deploy(
-        self, parameters: dict, deployment_name: str, what_if: bool = False, no_progress: Optional[bool] = None
-    ):
+    def deploy(self, instance_name: Optional[str] = None):
+        parameters = {
+            "clusterName": {"value": self.cluster_name},
+        }
+        if instance_name:
+            parameters["instanceName"] = {"value": instance_name}
+
         with Progress(
             SpinnerColumn("star"),
             *Progress.get_default_columns(),
@@ -372,7 +382,11 @@ class InstanceRestore:
         ) as progress:
             # TODO cloning to?
             _ = progress.add_task("Cloning to...", total=None)
-            self._deploy_template(parameters=parameters, deployment_name=deployment_name, what_if=True)
+            self._deploy_template(
+                parameters=parameters,
+                deployment_name=default_bundle_name(self.from_instance_name, file_ext=None),
+                what_if=True,
+            )
 
 
 def backup_ops_instance(
@@ -383,8 +397,7 @@ def backup_ops_instance(
     to_dir: Optional[str] = None,
     template_mode: Optional[str] = None,
     to_instance_name: Optional[str] = None,
-    to_cluster_name: Optional[str] = None,
-    to_resource_group_name: Optional[str] = None,
+    to_cluster_id: Optional[str] = None,
     use_self_hosted_issuer: Optional[bool] = None,
     no_progress: Optional[bool] = None,
     confirm_yes: Optional[bool] = None,
@@ -398,12 +411,12 @@ def backup_ops_instance(
     )
     bundle_path = get_bundle_path(instance_name, bundle_dir=to_dir)
 
-    backup_state = backup_manager.analyze_cluster(**kwargs)
+    backup_state = backup_manager.analyze_cluster(to_cluster_id)
 
     if not no_progress:
         render_upgrade_table(backup_state, bundle_path, detailed=summary_mode == SummaryMode.DETAILED.value)
 
-    if all([not to_dir, not to_cluster_name, not to_resource_group_name]):
+    if all([not to_dir, not to_cluster_id]):
         return
 
     should_bail = not should_continue_prompt(confirm_yes=confirm_yes, context="Clone")
@@ -413,8 +426,16 @@ def backup_ops_instance(
     template_content = backup_state.get_content()
     template_content.write(bundle_path)
 
+    if backup_state.to_cluster_id:
+        restore_client = backup_state.get_restore_client(no_progress=no_progress)
+        restore_client.deploy(instance_name=to_instance_name)
 
-def render_upgrade_table(backup_state: "BackupState", bundle_path: Optional[str] = None, detailed: bool = False):
+
+def render_upgrade_table(
+    backup_state: "BackupState",
+    bundle_path: Optional[str] = None,
+    detailed: bool = False,
+):
     table = get_default_table(include_name=detailed)
     table.title += f" of {backup_state.instance['name']}"
     for rtype in backup_state.resources:
@@ -428,6 +449,15 @@ def render_upgrade_table(backup_state: "BackupState", bundle_path: Optional[str]
 
     if bundle_path:
         DEFAULT_CONSOLE.print(f"State will be saved to:\n-> {bundle_path}\n")
+
+    if backup_state.to_cluster_id:
+        DEFAULT_CONSOLE.print(
+            f"State will be cloned to connected cluster:\n"
+            f"* Name: {backup_state.parsed_to_cluster_id['name']}\n"
+            f"* Resource Group: {backup_state.parsed_to_cluster_id['resource_group']}\n"
+            f"* Subscription: {backup_state.parsed_to_cluster_id['subscription']}\n",
+            highlight=False,
+        )
 
 
 def get_default_table(include_name: bool = False) -> Table:
@@ -447,17 +477,26 @@ def get_default_table(include_name: bool = False) -> Table:
 
 
 class BackupState:
-    def __init__(self, instance: dict, resources: dict, template_gen: "TemplateGen"):
+    def __init__(
+        self, instance: dict, resources: dict, template_gen: "TemplateGen", to_cluster_id: Optional[str] = None
+    ):
         self.instance = instance
         self.resources = resources
         self.template_gen = template_gen
+        self.to_cluster_id = to_cluster_id
+        self.parsed_to_cluster_id = parse_resource_id(to_cluster_id)
 
     def get_content(self) -> "TemplateContent":
         return self.template_gen.get_content()
 
-    @property
-    def instance_id_parts(self):
-        return parse_resource_id(self.instance["id"])
+    def get_restore_client(self, no_progress: Optional[bool] = None) -> "InstanceRestore":
+        if self.to_cluster_id:
+            InstanceRestore(
+                from_instance_name=self.instance["name"],
+                cluster_resource_id=self.to_cluster_id,
+                template_content=self.get_content(),
+                no_progress=no_progress,
+            )
 
 
 class BackupManager:
@@ -489,7 +528,7 @@ class BackupManager:
         self.active_deployment: Dict[StateResourceKey, List[str]] = {}
         self.chunk_size = 800
 
-    def analyze_cluster(self) -> "BackupState":
+    def analyze_cluster(self, to_cluster_id: Optional[str] = None) -> "BackupState":
         with Progress(
             SpinnerColumn("star"),
             *Progress.get_default_columns(),
@@ -517,6 +556,7 @@ class BackupManager:
                 template_gen=TemplateGen(
                     self.rcontainer_map, self.parameter_map, self.variable_map, self.metadata_map
                 ),
+                to_cluster_id=to_cluster_id,
             )
 
     def _enumerate_resources(self):
@@ -1062,9 +1102,12 @@ def get_bundle_path(instance_name: str, bundle_dir: Optional[str] = None) -> Opt
     return bundle_pure_path
 
 
-def default_bundle_name(instance_name: str) -> str:
+def default_bundle_name(instance_name: str, file_ext: Optional[str] = "json") -> str:
     timestamp = get_timestamp_now_utc(format="%Y%m%dT%H%M%S")
-    return f"clone_{to_safe_filename(instance_name)}_{timestamp}_aio.json"
+    name = f"clone_{to_safe_filename(instance_name)}_{timestamp}_aio"
+    if file_ext:
+        name += ".json"
+    return name
 
 
 def build_parameter(name: str, type: str = "string", metadata: Optional[dict] = None, default: Any = None) -> dict:
