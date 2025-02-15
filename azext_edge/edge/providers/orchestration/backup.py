@@ -425,29 +425,38 @@ class InstanceRestore:
         instance_name: Optional[str] = None,
         use_self_hosted_issuer: Optional[bool] = None,
     ):
-        self._handle_federation(use_self_hosted_issuer)
-
         parameters = {
             "clusterName": {"value": self.cluster_name},
         }
         if instance_name:
             parameters["instanceName"] = {"value": instance_name}
-
+        deployment_name = default_bundle_name(self.from_instance_name, file_ext=None)
         with Progress(
             SpinnerColumn("star"),
             *Progress.get_default_columns(),
             "Elapsed:",
             TimeElapsedColumn(),
-            transient=True,
+            transient=False,
             disable=bool(self.no_progress),
             # disable=True,
         ) as progress:
-            _ = progress.add_task(f"Cloning to {self.cluster_name}...", total=None)
+            task_id_what_if = progress.add_task("What-If evaluation of clone...", total=None)
             self._deploy_template(
                 parameters=parameters,
-                deployment_name=default_bundle_name(self.from_instance_name, file_ext=None),
+                deployment_name=deployment_name,
                 what_if=True,
             )
+            # TODO progress
+            self._handle_federation(use_self_hosted_issuer)
+            progress.stop_task(task_id=task_id_what_if)
+            task_id_clone = progress.add_task(
+                f"Cloning {self.from_instance_name} to {self.cluster_name}...", total=None
+            )
+            poller = self._deploy_template(
+                parameters=parameters,
+                deployment_name=deployment_name,
+            )
+            _ = wait_for_terminal_state(poller)
 
 
 def backup_ops_instance(
@@ -501,7 +510,7 @@ def render_upgrade_table(
     detailed: bool = False,
 ):
     table = get_default_table(include_name=detailed)
-    table.title += f" of {backup_state.instance['name']}"
+    table.title += f" of {backup_state.instance_name}"
     for rtype in backup_state.resources:
         row_content = [f"{rtype}", f"{len(backup_state.resources[rtype])}"]
         if detailed:
@@ -545,14 +554,14 @@ class BackupState:
     def __init__(
         self,
         cmd,
-        instance: dict,
+        instance_name: str,
         instances: Instances,
         resources: dict,
         template_gen: "TemplateGen",
         user_assigned_mis: Optional[List[str]] = None,
     ):
         self.cmd = cmd
-        self.instance = instance
+        self.instance_name = instance_name
         self.instances = instances
         self.resources = resources
         self.template_gen = template_gen
@@ -566,7 +575,7 @@ class BackupState:
         return InstanceRestore(
             cmd=self.cmd,
             instances=self.instances,
-            from_instance_name=self.instance["name"],
+            from_instance_name=self.instance_name,
             cluster_resource_id=to_cluster_id,
             template_content=self.content,
             user_assigned_mis=self.user_assigned_mis,
@@ -613,7 +622,7 @@ class BackupManager:
             disable=bool(self.no_progress),
             # disable=True,
         ) as progress:
-            _ = progress.add_task(f"Analyzing instance {self.instance_name}...", total=None)
+            _ = progress.add_task(f"Analyzing {self.instance_name}...", total=None)
             self._build_parameters(self.instance_record)
             self._build_variables()
             self._build_metadata()
@@ -627,7 +636,7 @@ class BackupManager:
 
             return BackupState(
                 cmd=self.cmd,
-                instance=self.instance_record,
+                instance_name=self.instance_name,
                 instances=self.instances,
                 resources=self._enumerate_resources(),
                 template_gen=TemplateGen(
@@ -776,7 +785,6 @@ class BackupManager:
             config={"apply_nested_name": False},
             depends_on=cl_monikers,
         )
-        # schema_reg_id = self.instance_record["properties"]["schemaRegistryRef"]["resourceId"]
         self.instance_record["properties"]["schemaRegistryRef"]["resourceId"] = TEMPLATE_EXPRESSION_MAP[
             "schemaRegistryId"
         ]
@@ -993,7 +1001,9 @@ class BackupManager:
 
     def _analyze_instance_identity(self):
         identity: dict = self.instance_record.get("identity", {}).get("userAssignedIdentities", {})
-        self.instance_identities.extend(list(identity.keys()))
+        for rid in identity:
+            identity[rid] = {}
+            self.instance_identities.append(rid)
 
     def add_deployment_by_key(self, key: StateResourceKey) -> Tuple[str, str]:
         deployments_by_key = self.active_deployment.get(key, [])
