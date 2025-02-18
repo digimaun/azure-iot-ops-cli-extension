@@ -94,6 +94,7 @@ class TemplateParams(Enum):
     SUBSCRIPTION = "subscription"
     RESOURCEGROUP = "resourceGroup"
     SCHEMA_REGISTRY_ID = "schemaRegistryId"
+    PRINCIPAL_ID = "principalId"
     RESOURCE_SLUG = "resourceSlug"
 
 
@@ -160,6 +161,8 @@ class DeploymentContainer:
         api_version: str = "2022-09-01",
         parameters: Optional[dict] = None,
         depends_on: Optional[Union[Iterable[str], str]] = None,
+        resource_group: Optional[str] = None,
+        subscription: Optional[str] = None,
     ):
         self.name = name
         self.rcontainer_map: Dict[str, "ResourceContainer"] = {}
@@ -168,6 +171,8 @@ class DeploymentContainer:
         self.depends_on = depends_on
         if isinstance(self.depends_on, str):
             self.depends_on = {self.depends_on}
+        self.resource_group = resource_group
+        self.subscription = subscription
 
     def add_resources(
         self,
@@ -210,12 +215,27 @@ class DeploymentContainer:
                 },
             },
         }
+        if self.resource_group:
+            result["resourceGroup"] = self.resource_group
+        if self.subscription:
+            # TODO: verify
+            # result["subscription"] = self.subscription
+            pass
         if self.parameters:
             input_param_map = {}
+            template_param_map = {}
+
             for param in self.parameters:
-                input_param_map[param] = {"value": f"[parameters('{param}')]"}
+                target_value = (
+                    self.parameters[param]["value"]
+                    if "value" in self.parameters[param]
+                    else f"[parameters('{param}')]"
+                )
+                input_param_map[param] = {"value": target_value}
+                template_param_map[param] = {"type": self.parameters[param]["type"]}
+
             result["properties"]["parameters"] = input_param_map
-            result["properties"]["template"]["parameters"] = self.parameters
+            result["properties"]["template"]["parameters"] = template_param_map
         if self.depends_on:
             result["dependsOn"] = list(self.depends_on)
         return result
@@ -277,19 +297,20 @@ class ResourceContainer:
         def __extract_suffix(path: str) -> str:
             return "/" + path.partition("/")[2]
 
-        test: Dict[str, Union[str, int]] = parse_resource_id(self.resource_state["id"])
-        target_name = test["name"]
-        last_child_num = test.get("last_child_num", 0)
-        if last_child_num:
-            for i in range(1, last_child_num + 1):
-                target_name += f"/{test[f'child_name_{i}']}"
-        self.resource_state["name"] = target_name
-        if test["type"].lower() == "instances":
-            suffix = __extract_suffix(target_name)
-            if suffix == "/":
-                self.resource_state["name"] = TEMPLATE_EXPRESSION_MAP["instanceName"]
-            else:
-                self.resource_state["name"] = TEMPLATE_EXPRESSION_MAP["instanceNestedName"].format(suffix)
+        if "id" in self.resource_state:
+            test: Dict[str, Union[str, int]] = parse_resource_id(self.resource_state["id"])
+            target_name = test["name"]
+            last_child_num = test.get("last_child_num", 0)
+            if last_child_num:
+                for i in range(1, last_child_num + 1):
+                    target_name += f"/{test[f'child_name_{i}']}"
+            self.resource_state["name"] = target_name
+            if test["type"].lower() == "instances":
+                suffix = __extract_suffix(target_name)
+                if suffix == "/":
+                    self.resource_state["name"] = TEMPLATE_EXPRESSION_MAP["instanceName"]
+                else:
+                    self.resource_state["name"] = TEMPLATE_EXPRESSION_MAP["instanceNestedName"].format(suffix)
 
     def get(self):
         apply_nested_name = self.config.get("apply_nested_name", True)
@@ -431,6 +452,17 @@ class InstanceRestore:
         if instance_name:
             parameters["instanceName"] = {"value": instance_name}
         deployment_name = default_bundle_name(self.from_instance_name, file_ext=None)
+
+        DEFAULT_CONSOLE.print()
+        with DEFAULT_CONSOLE.status("Pre-flight checks..."):
+            self._deploy_template(
+                parameters=parameters,
+                deployment_name=deployment_name,
+                what_if=True,
+            )
+            # TODO
+            self._handle_federation(use_self_hosted_issuer)
+
         with Progress(
             SpinnerColumn("star"),
             *Progress.get_default_columns(),
@@ -440,18 +472,7 @@ class InstanceRestore:
             disable=bool(self.no_progress),
             # disable=True,
         ) as progress:
-            task_id_what_if = progress.add_task("What-If evaluation of clone...", total=None)
-            self._deploy_template(
-                parameters=parameters,
-                deployment_name=deployment_name,
-                what_if=True,
-            )
-            # TODO progress
-            self._handle_federation(use_self_hosted_issuer)
-            progress.stop_task(task_id=task_id_what_if)
-            task_id_clone = progress.add_task(
-                f"Cloning {self.from_instance_name} to {self.cluster_name}...", total=None
-            )
+            _ = progress.add_task("Cloning...", total=None)
             poller = self._deploy_template(
                 parameters=parameters,
                 deployment_name=deployment_name,
@@ -688,12 +709,6 @@ class BackupManager:
                 default="[format('location-{0}', parameters('resourceSlug'))]",
             )
         )
-        self.parameter_map.update(
-            build_parameter(
-                name=TemplateParams.SCHEMA_REGISTRY_ID.value,
-                default=instance["properties"]["schemaRegistryRef"]["resourceId"],
-            )
-        )
 
     def _build_variables(self):
         self.variable_map["aioExtName"] = "[format('azure-iot-operations-{0}', parameters('resourceSlug'))]"
@@ -785,21 +800,43 @@ class BackupManager:
             config={"apply_nested_name": False},
             depends_on=cl_monikers,
         )
-        self.instance_record["properties"]["schemaRegistryRef"]["resourceId"] = TEMPLATE_EXPRESSION_MAP[
-            "schemaRegistryId"
-        ]
+        # self.instance_record["properties"]["schemaRegistryRef"]["resourceId"] = TEMPLATE_EXPRESSION_MAP[
+        #     "schemaRegistryId"
+        # ]
         self._add_resource(
             key=StateResourceKey.INSTANCE,
             api_version=api_version,
             data=self.instance_record,
             depends_on=StateResourceKey.CL,
         )
-        self._add_resource(
+        # self._add_resource(
+        #     key=StateResourceKey.ROLE_ASSIGNMENT,
+        #     api_version="2022-04-01",
+        #     data=get_role_assignment(),
+        #     depends_on=EXTENSION_TYPE_TO_MONIKER_MAP[EXTENSION_TYPE_OPS],
+        #     config={"apply_nested_name": False},
+        # )
+        nested_params = {
+            **build_parameter(name=TemplateParams.CLUSTER_NAME.value),
+            **build_parameter(name=TemplateParams.INSTANCE_NAME.value),
+            **build_parameter(
+                name=TemplateParams.PRINCIPAL_ID.value,
+                value="[reference('iotOperations', '2023-05-01', 'Full').identity.principalId]",
+            ),
+            **build_parameter(
+                name=TemplateParams.SCHEMA_REGISTRY_ID.value,
+                value=self.instance_record["properties"]["schemaRegistryRef"]["resourceId"],
+            ),
+        }
+        parsed_sr_id = parse_resource_id(self.instance_record["properties"]["schemaRegistryRef"]["resourceId"])
+        self._add_deployment(
             key=StateResourceKey.ROLE_ASSIGNMENT,
             api_version="2022-04-01",
-            data=get_role_assignment(),
+            data_iter=[get_role_assignment()],
             depends_on=EXTENSION_TYPE_TO_MONIKER_MAP[EXTENSION_TYPE_OPS],
-            config={"apply_nested_name": False},
+            parameters=nested_params,
+            resource_group=parsed_sr_id["resource_group"],
+            subscription=parsed_sr_id["subscription"],
         )
 
     def _analyze_instance_resources(self):
@@ -1020,6 +1057,8 @@ class BackupManager:
         data_iter: Iterable,
         depends_on: Optional[Union[str, Iterable[str]]] = None,
         parameters: Optional[dict] = None,
+        resource_group: Optional[str] = None,
+        subscription: Optional[str] = None,
     ):
         data_iter = list(data_iter)
         if data_iter:
@@ -1030,6 +1069,8 @@ class BackupManager:
                     name=f"[{deployment_name}]",
                     depends_on=depends_on,
                     parameters=parameters,
+                    resource_group=resource_group,
+                    subscription=subscription,
                 )
                 deployment_container.add_resources(
                     key=key,
@@ -1156,7 +1197,13 @@ def default_bundle_name(instance_name: str, file_ext: Optional[str] = "json") ->
     return name
 
 
-def build_parameter(name: str, type: str = "string", metadata: Optional[dict] = None, default: Any = None) -> dict:
+def build_parameter(
+    name: str,
+    type: str = "string",
+    metadata: Optional[dict] = None,
+    value: Optional[Any] = None,
+    default: Optional[Any] = None,
+) -> dict:
     result = {
         name: {
             "type": type,
@@ -1164,6 +1211,8 @@ def build_parameter(name: str, type: str = "string", metadata: Optional[dict] = 
     }
     if metadata:
         result[name]["metadata"] = metadata
+    if value:
+        result[name]["value"] = value
     if default:
         result[name]["defaultValue"] = default
     return result
@@ -1173,7 +1222,7 @@ def get_role_assignment():
     return {
         "type": "Microsoft.Authorization/roleAssignments",
         "name": (
-            f"[guid(parameters('{TemplateParams.SCHEMA_REGISTRY_ID.value}'), "
+            f"[guid(parameters('{TemplateParams.INSTANCE_NAME.value}'), "
             f"parameters('{TemplateParams.CLUSTER_NAME.value}'), resourceGroup().id)]"
         ),
         "scope": f"[parameters('{TemplateParams.SCHEMA_REGISTRY_ID.value}')]",
@@ -1181,10 +1230,7 @@ def get_role_assignment():
             "roleDefinitionId": (
                 f"[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '{CONTRIBUTOR_ROLE_ID}')]"
             ),
-            "principalId": (
-                f"[reference('{EXTENSION_TYPE_TO_MONIKER_MAP[EXTENSION_TYPE_OPS]}', "
-                "'2023-05-01', 'Full').identity.principalId]"
-            ),
+            "principalId": "[parameters('principalId')]",
             "principalType": "ServicePrincipal",
         },
     }
