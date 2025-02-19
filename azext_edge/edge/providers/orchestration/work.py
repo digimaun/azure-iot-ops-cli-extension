@@ -7,7 +7,7 @@
 from enum import IntEnum
 from json import dumps
 from time import sleep
-from typing import TYPE_CHECKING, Dict, List, Optional, Tuple, Union
+from typing import TYPE_CHECKING, Dict, List, Optional, Tuple, Union, Iterable
 from uuid import uuid4
 
 from azure.cli.core.azclierror import AzureResponseError, ValidationError
@@ -34,6 +34,7 @@ from .common import (
     OPS_EXTENSION_DEPS,
     ClusterConnectStatus,
 )
+from .resources.custom_locations import CustomLocations
 from .permissions import ROLE_DEF_FORMAT_STR, PermissionManager, PrincipalType
 from .resource_map import IoTOperationsResourceMap
 from .targets import InitTargets
@@ -113,6 +114,7 @@ class WorkManager:
         self.subscription_id: str = get_subscription_id(cli_ctx=cmd.cli_ctx)
         self.resource_client = get_resource_client(subscription_id=self.subscription_id)
         self.permission_manager = PermissionManager(subscription_id=self.subscription_id)
+        self.custom_locations = CustomLocations(self.cmd)
 
     def _bootstrap_ux(self, show_progress: bool = False):
         self._display = WorkDisplay()
@@ -419,6 +421,9 @@ class WorkManager:
                     api_version=REGISTRY_PREVIEW_API_VERSION,
                 )
                 self._process_extension_dependencies()
+                cl_resource = self._create_custom_location(
+                    extension_ids=[self.ops_extension_dependencies[ext]["id"] for ext in [EXTENSION_TYPE_PLATFORM]]
+                )
 
                 instance_work_name = self._work_format_str.format(op="instance")
                 self._render_display(category=WorkCategoryKey.DEPLOY_IOT_OPS, active_step=WorkStepKey.WHAT_IF_INSTANCE)
@@ -600,4 +605,15 @@ class WorkManager:
             "https://portal.azure.com/#blade/HubsExtension/DeploymentDetailsBlade/id/"
             f"%2Fsubscriptions%2F{self.subscription_id}%2FresourceGroups%2F{self._targets.resource_group_name}"
             f"%2Fproviders%2FMicrosoft.Resources%2Fdeployments%2F{deployment_name}"
+        )
+
+    def _create_custom_location(self, extension_ids: Iterable[str]) -> dict:
+        return self.custom_locations.create(
+            name=self._targets.custom_location_name,
+            resource_group_name=self._targets.resource_group_name,
+            host_resource_id=self._resource_map.connected_cluster.resource_id,
+            namespace=self._targets.cluster_namespace,
+            display_name=self._targets.custom_location_name,
+            location=self._targets.location,
+            cluster_extension_ids=extension_ids,
         )

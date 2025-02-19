@@ -16,7 +16,7 @@ from ...common import (
     DEFAULT_DATAFLOW_ENDPOINT,
     DEFAULT_DATAFLOW_PROFILE,
 )
-from ...util import assemble_nargs_to_dict
+from ...util import assemble_nargs_to_dict, url_safe_hash_phrase
 from ...util.az_client import parse_resource_id
 from ..orchestration.common import (
     TRUST_ISSUER_KIND_KEY,
@@ -76,6 +76,11 @@ class InitTargets:
         self.schema_registry_resource_id = schema_registry_resource_id
         self.cluster_namespace = self._sanitize_k8s_name(cluster_namespace)
         self.location = location
+        if not custom_location_name:
+            custom_location_name = get_default_cl_name(
+                resource_group_name=resource_group_name, cluster_name=cluster_name, namespace=cluster_namespace
+            )
+
         self.custom_location_name = self._sanitize_k8s_name(custom_location_name)
         self.deploy_resource_sync_rules = bool(enable_rsync_rules)
         self.instance_name = self._sanitize_k8s_name(instance_name)
@@ -169,6 +174,7 @@ class InitTargets:
     def get_ops_instance_template(
         self,
         cl_extension_ids: List[str],
+        extension_only: bool = False,
     ) -> Tuple[dict, dict]:
         template, parameters = self._handle_apply_targets(
             param_to_target={
@@ -197,6 +203,10 @@ class InitTargets:
 
         if self.ops_train:
             template.content["variables"]["TRAINS"]["iotOperations"] = self.ops_train
+
+        if extension_only:
+            pass #TODO
+            return template.content, parameters
 
         instance = template.get_resource_by_key("aioInstance")
         instance["properties"]["description"] = self.instance_description
@@ -307,3 +317,7 @@ class InitTargets:
             result["settings"] = target_settings
 
         return result
+
+
+def get_default_cl_name(resource_group_name: str, cluster_name: str, namespace: str) -> str:
+    return "location-" + url_safe_hash_phrase(f"{resource_group_name}{cluster_name}{namespace}")[:5]
