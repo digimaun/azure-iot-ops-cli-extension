@@ -532,14 +532,17 @@ def render_upgrade_table(
 ):
     table = get_default_table(include_name=detailed)
     table.title += f" of {backup_state.instance_name}"
+    total = 0
     for rtype in backup_state.resources:
-        row_content = [f"{rtype}", f"{len(backup_state.resources[rtype])}"]
+        rtype_len = len(backup_state.resources[rtype])
+        total += rtype_len
+        row_content = [f"{rtype}", f"{rtype_len}"]
         if detailed:
             row_content.append("\n".join([r["resource_name"] for r in backup_state.resources[rtype]]))
-
         table.add_row(*row_content)
 
     DEFAULT_CONSOLE.print(table)
+    DEFAULT_CONSOLE.print(f"Total resources: {total}\n", highlight=True)
 
     if bundle_path:
         DEFAULT_CONSOLE.print(f"State will be saved to:\n-> {bundle_path}\n")
@@ -675,7 +678,7 @@ class BackupManager:
                 if isinstance(target_rcontainer, ResourceContainer):
                     if "id" not in target_rcontainer.resource_state:
                         continue
-                    parsed_id = parse_resource_id(target_rcontainer.resource_state["id"])
+                    parsed_id = parse_resource_id(target_rcontainer.resource_state["id"].lower())
                     key = f"{parsed_id['namespace']}/{parsed_id['type']}"
                     if "resource_type" in parsed_id and parsed_id["resource_type"] != parsed_id["type"]:
                         key += f"/{parsed_id['resource_type']}"

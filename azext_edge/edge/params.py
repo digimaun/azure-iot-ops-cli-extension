@@ -862,8 +862,8 @@ def load_iotops_arguments(self, _):
             arg_group="To Cluster",
         )
         context.argument(
-            "to_cluster_name",
-            options_list=["--to-cluster-d"],
+            "to_cluster_id",
+            options_list=["--to-cluster-id"],
             help="The resource Id of the connected cluster the clone will be applied to.",
             arg_group="To Cluster",
         )
