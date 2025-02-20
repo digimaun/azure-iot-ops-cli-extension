@@ -174,7 +174,7 @@ class WorkManager:
             self._display.add_category(
                 WorkCategoryKey.DEPLOY_IOT_OPS, "Deploy IoT Operations", False, self._format_instance_desc()
             )
-            self._display.add_step(WorkCategoryKey.DEPLOY_IOT_OPS, WorkStepKey.WHAT_IF_INSTANCE, "What-If evaluation")
+            self._display.add_step(WorkCategoryKey.DEPLOY_IOT_OPS, WorkStepKey.WHAT_IF_INSTANCE, "Create extension")
             self._display.add_step(
                 WorkCategoryKey.DEPLOY_IOT_OPS,
                 WorkStepKey.DEPLOY_INSTANCE,
@@ -421,24 +421,45 @@ class WorkManager:
                     api_version=REGISTRY_PREVIEW_API_VERSION,
                 )
                 self._process_extension_dependencies()
-                cl_resource = self._create_custom_location(
-                    extension_ids=[self.ops_extension_dependencies[ext]["id"] for ext in [EXTENSION_TYPE_PLATFORM]]
+                ##
+                self._render_display(category=WorkCategoryKey.DEPLOY_IOT_OPS, active_step=WorkStepKey.WHAT_IF_INSTANCE)
+                _ = self._create_or_update_custom_location(
+                    extension_ids=[self.ops_extension_dependencies[EXTENSION_TYPE_PLATFORM]["id"]]
+                )
+                instance_content, instance_parameters = self._targets.get_ops_instance_template(
+                    cl_extension_ids=[], extension_only=True
+                )
+                instance_work_name = self._work_format_str.format(op="extension")
+                instance_poller = self._deploy_template(
+                    content=instance_content,
+                    parameters=instance_parameters,
+                    deployment_name=instance_work_name,
+                )
+                _ = wait_for_terminal_state(instance_poller)
+                self._create_or_update_custom_location(
+                    extension_ids=[
+                        self.ops_extension_dependencies[ext]["id"]
+                        for ext in [EXTENSION_TYPE_PLATFORM, EXTENSION_TYPE_SSC]
+                    ]
+                    + [self.ops_extension["id"]]
                 )
 
+                ##
                 instance_work_name = self._work_format_str.format(op="instance")
-                self._render_display(category=WorkCategoryKey.DEPLOY_IOT_OPS, active_step=WorkStepKey.WHAT_IF_INSTANCE)
                 instance_content, instance_parameters = self._targets.get_ops_instance_template(
                     cl_extension_ids=[
                         self.ops_extension_dependencies[ext]["id"]
                         for ext in [EXTENSION_TYPE_PLATFORM, EXTENSION_TYPE_SSC]
                     ],
                 )
+                import pdb; pdb.set_trace()
                 self._deploy_template(
                     content=instance_content,
                     parameters=instance_parameters,
                     deployment_name=instance_work_name,
                     what_if=True,
                 )
+                import pdb; pdb.set_trace()
                 self._complete_step(
                     category=WorkCategoryKey.DEPLOY_IOT_OPS,
                     completed_step=WorkStepKey.WHAT_IF_INSTANCE,
@@ -607,7 +628,7 @@ class WorkManager:
             f"%2Fproviders%2FMicrosoft.Resources%2Fdeployments%2F{deployment_name}"
         )
 
-    def _create_custom_location(self, extension_ids: Iterable[str]) -> dict:
+    def _create_or_update_custom_location(self, extension_ids: Iterable[str]) -> dict:
         return self.custom_locations.create(
             name=self._targets.custom_location_name,
             resource_group_name=self._targets.resource_group_name,

@@ -174,7 +174,7 @@ class InitTargets:
     def get_ops_instance_template(
         self,
         cl_extension_ids: List[str],
-        extension_only: bool = False,
+        extension_only: Optional[bool] = False,
     ) -> Tuple[dict, dict]:
         template, parameters = self._handle_apply_targets(
             param_to_target={
@@ -205,8 +205,23 @@ class InitTargets:
             template.content["variables"]["TRAINS"]["iotOperations"] = self.ops_train
 
         if extension_only:
-            pass #TODO
+            resources: dict = template.content.get("resources", {})
+            for k in list(resources.keys()):
+                if k not in ["cluster", "aio_extension"]:
+                    del resources[k]
             return template.content, parameters
+
+        extension_config: dict = template.content["resources"].get("aio_extension", {})
+        for k in list(extension_config.keys()):
+            if k not in ["type", "apiVersion", "name"]:
+                del extension_config[k]
+        extension_config["existing"] = True
+
+        cl_config: dict = template.content["resources"].get("customLocation", {})
+        for k in list(cl_config.keys()):
+            if k not in ["type", "apiVersion", "name"]:
+                del cl_config[k]
+        cl_config["existing"] = True
 
         instance = template.get_resource_by_key("aioInstance")
         instance["properties"]["description"] = self.instance_description
