@@ -424,6 +424,7 @@ class InstanceRestore:
                 if ":aio-" not in cred["properties"]["subject"]:
                     continue
 
+                # TODO: Handle repeats if subject not already handled
                 self.msi_client.federated_identity_credentials.create_or_update(
                     resource_group_name=resource_id["resource_group"],
                     resource_name=resource_id["name"],
@@ -454,7 +455,7 @@ class InstanceRestore:
         deployment_name = default_bundle_name(self.from_instance_name, file_ext=None)
 
         DEFAULT_CONSOLE.print()
-        with DEFAULT_CONSOLE.status("Pre-flight checks..."):
+        with DEFAULT_CONSOLE.status("Pre-flight..."):
             self._deploy_template(
                 parameters=parameters,
                 deployment_name=deployment_name,
@@ -463,21 +464,20 @@ class InstanceRestore:
             # TODO
             self._handle_federation(use_self_hosted_issuer)
 
-        with Progress(
-            SpinnerColumn("star"),
-            *Progress.get_default_columns(),
-            "Elapsed:",
-            TimeElapsedColumn(),
-            transient=False,
-            disable=bool(self.no_progress),
-            # disable=True,
-        ) as progress:
-            _ = progress.add_task("Cloning...", total=None)
-            poller = self._deploy_template(
+            self._deploy_template(
                 parameters=parameters,
                 deployment_name=deployment_name,
             )
-            _ = wait_for_terminal_state(poller)
+        deployment_link = self._get_deployment_link(deployment_name=deployment_name)
+        DEFAULT_CONSOLE.print(f"[link={deployment_link}]{self.cluster_name} deployment link[/link]")
+        DEFAULT_CONSOLE.print()
+
+    def _get_deployment_link(self, deployment_name: str) -> str:
+        return (
+            "https://portal.azure.com/#blade/HubsExtension/DeploymentDetailsBlade/id/"
+            f"%2Fsubscriptions%2F{self.subscription_id}%2FresourceGroups%2F{self.resource_group_name}"
+            f"%2Fproviders%2FMicrosoft.Resources%2Fdeployments%2F{deployment_name}"
+        )
 
 
 def backup_ops_instance(
@@ -531,7 +531,6 @@ def render_upgrade_table(
     detailed: bool = False,
 ):
     table = get_default_table(include_name=detailed)
-    table.title += f" of {backup_state.instance_name}"
     total = 0
     for rtype in backup_state.resources:
         rtype_len = len(backup_state.resources[rtype])
@@ -541,8 +540,9 @@ def render_upgrade_table(
             row_content.append("\n".join([r["resource_name"] for r in backup_state.resources[rtype]]))
         table.add_row(*row_content)
 
+    table.title += f" of {backup_state.instance_name}\nTotal resources {total}"
     DEFAULT_CONSOLE.print(table)
-    DEFAULT_CONSOLE.print(f"Total resources: {total}\n", highlight=True)
+    # DEFAULT_CONSOLE.print(f"Total resources: {total}\n", highlight=True)
 
     if bundle_path:
         DEFAULT_CONSOLE.print(f"State will be saved to:\n-> {bundle_path}\n")
@@ -954,9 +954,14 @@ class BackupManager:
                 key=StateResourceKey.DATAFLOW,
                 api_version=api_version,
                 data_iter=dataflows,
-                depends_on=get_resource_id_by_parts(
-                    "Microsoft.Resources/deployments", self.active_deployment[StateResourceKey.PROFILE][-1]
-                ),
+                depends_on=[
+                    get_resource_id_by_parts(
+                        "Microsoft.Resources/deployments", self.active_deployment[StateResourceKey.PROFILE][-1]
+                    ),
+                    get_resource_id_by_parts(
+                        "Microsoft.Resources/deployments", self.active_deployment[StateResourceKey.ENDPOINT][-1]
+                    ),
+                ],
                 parameters=nested_params,
             )
 
@@ -974,7 +979,13 @@ class BackupManager:
             key=StateResourceKey.ASSET_ENDPOINT_PROFILE,
             api_version=REGISTRY_API_VERSION,
             data_iter=asset_endpoints,
-            depends_on=instance_resource_id_expr,
+            depends_on=[
+                instance_resource_id_expr,
+                get_resource_id_by_parts(
+                    "Microsoft.Resources/deployments",
+                    self.active_deployment[StateResourceKey.LISTENER][-1],
+                ),
+            ],
             parameters=nested_params,
         )
 
