@@ -238,6 +238,29 @@ def chunk_list(initial: list, chunk_size: int) -> List[list]:
     return result
 
 
+def chunk_list2(data: list, chunk_size: int, data_size: int, size_unit: str = "kb") -> List[list]:
+    if size_unit.lower() == "mb":
+        data_size *= 1024
+
+    result = []
+    current_chunk = []
+
+    for item in data:
+        current_chunk.append(item)
+
+        serialized_size = len(json.dumps(current_chunk).encode("utf-8")) / 1024  # convert bytes to kb
+
+        if len(current_chunk) > chunk_size or serialized_size > data_size:
+            current_chunk.pop()
+            result.append(current_chunk)
+            current_chunk = [item]
+
+    if current_chunk:
+        result.append(current_chunk)
+
+    return result
+
+
 def to_safe_filename(name: str) -> str:
     import re
 

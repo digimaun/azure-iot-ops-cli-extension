@@ -25,7 +25,7 @@ from rich.table import Table, box
 
 from ....constants import VERSION as CLI_VERSION
 from ...util import (
-    chunk_list,
+    chunk_list2,
     get_timestamp_now_utc,
     should_continue_prompt,
     to_safe_filename,
@@ -498,6 +498,7 @@ def backup_ops_instance(
         cmd=cmd,
         instance_name=instance_name,
         resource_group_name=resource_group_name,
+        template_mode=template_mode,
         no_progress=no_progress,
     )
     bundle_path = get_bundle_path(instance_name, bundle_dir=to_dir)
@@ -613,12 +614,12 @@ class BackupManager:
         cmd,
         resource_group_name: str,
         instance_name: str,
-        oidc_issuer: Optional[str] = None,
+        template_mode: Optional[str] = None,
         no_progress: Optional[bool] = None,
     ):
         self.cmd = cmd
         self.instance_name = instance_name
-        self.oidc_issuer = oidc_issuer
+        self.template_mode = template_mode
         self.resource_group_name = resource_group_name
         self.no_progress = no_progress
         self.instances = Instances(self.cmd)
@@ -1076,9 +1077,14 @@ class BackupManager:
     ):
         data_iter = list(data_iter)
         if data_iter:
-            chunked_list_data = chunk_list(data_iter, self.chunk_size)
+            chunked_list_data = chunk_list2(data_iter, self.chunk_size, 900)
+
             for chunk in chunked_list_data:
                 symbolic_name, deployment_name = self.add_deployment_by_key(key)
+                # TODO Debug
+                # with open(f"./{symbolic_name}.json", mode="w") as myfile:
+                #     myfile.write(dumps(chunk))
+
                 deployment_container = DeploymentContainer(
                     name=f"[{deployment_name}]",
                     depends_on=depends_on,
