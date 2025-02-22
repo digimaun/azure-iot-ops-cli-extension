@@ -6,7 +6,7 @@
 
 from enum import Enum
 from json import dumps
-from pathlib import PurePath
+from pathlib import PurePath, Path
 from typing import TYPE_CHECKING, Any, Dict, Iterable, List, Optional, Set, Tuple, Union
 from uuid import uuid4
 
@@ -330,17 +330,6 @@ class ResourceContainer:
         return result
 
 
-# TODO
-# "az iot ops clone
-# --from-instance --from-group "
-# --to-cluster --to-group [--to-instance (use default instance name if not provided)]
-# (--federate automatically if any managed id) --self-hosted-issuer
-# --to-dir
-# --mode nested || linked (only applicable if --to-dir)
-#
-# linked template, changed templateLink: {relativePath: children/nestedChild.json}
-
-
 class InstanceRestore:
     def __init__(
         self,
@@ -452,7 +441,7 @@ class InstanceRestore:
         }
         if instance_name:
             parameters["instanceName"] = {"value": instance_name}
-        deployment_name = default_bundle_name(self.from_instance_name, file_ext=None)
+        deployment_name = default_bundle_name(self.from_instance_name)
 
         DEFAULT_CONSOLE.print()
         with DEFAULT_CONSOLE.status("Pre-flight..."):
@@ -498,7 +487,6 @@ def backup_ops_instance(
         cmd=cmd,
         instance_name=instance_name,
         resource_group_name=resource_group_name,
-        template_mode=template_mode,
         no_progress=no_progress,
     )
     bundle_path = get_bundle_path(instance_name, bundle_dir=to_dir)
@@ -518,7 +506,7 @@ def backup_ops_instance(
         return
 
     template_content = backup_state.get_content()
-    template_content.write(bundle_path)
+    template_content.write(bundle_path, template_mode=template_mode)
 
     if to_cluster_id:
         restore_client = backup_state.get_restore_client(to_cluster_id=to_cluster_id, no_progress=no_progress)
@@ -527,7 +515,7 @@ def backup_ops_instance(
 
 def render_upgrade_table(
     backup_state: "BackupState",
-    bundle_path: Optional[str] = None,
+    bundle_path: Optional[PurePath] = None,
     to_cluster_id: Optional[str] = None,
     detailed: bool = False,
 ):
@@ -614,12 +602,10 @@ class BackupManager:
         cmd,
         resource_group_name: str,
         instance_name: str,
-        template_mode: Optional[str] = None,
         no_progress: Optional[bool] = None,
     ):
         self.cmd = cmd
         self.instance_name = instance_name
-        self.template_mode = template_mode
         self.resource_group_name = resource_group_name
         self.no_progress = no_progress
         self.instances = Instances(self.cmd)
@@ -1122,14 +1108,51 @@ class BackupManager:
 class TemplateContent:
     def __init__(self, content: dict):
         self.content = content
+        self.linked_type_map = {
+            "microsoft.deviceregistry/assets": 0,
+            "microsoft.deviceregistry/assetendpointprofiles": 0,
+        }
 
-    def write(self, bundle_path: str):
+    def _get_deployments(self, root_dir: str) -> List[Tuple[str, dict]]:
+        result = []
+        resources: Dict[str, dict] = self.content.get("resources", {})
+        for key in resources:
+            if resources[key].get("type", "").lower() != "microsoft.resources/deployments":
+                continue
+            nested_resources: List[dict] = resources[key]["properties"]["template"].get("resources", [])
+            if not nested_resources:
+                continue
+            nested_type = nested_resources[0].get("type", "").lower()
+            if nested_type not in self.linked_type_map:
+                continue
+
+            self.linked_type_map[nested_type] += 1
+            kind = nested_type.split("/")[-1]
+            linked_name = f"{kind}_{self.linked_type_map[nested_type]}"
+            linked_rel_path = f"{root_dir}/{linked_name}.json"
+            resources[key]["properties"]["templateLink"] = {"relativePath": linked_rel_path}
+            result.append((linked_name, resources[key]["properties"]["template"]))
+            del resources[key]["properties"]["template"]
+
+        return result
+
+    def write(self, bundle_path: PurePath, template_mode: Optional[str] = None, file_ext: str = "json"):
         if not bundle_path:
             return
 
+        deployments = None
+        if template_mode == "linked":
+            deployments = self._get_deployments(bundle_path.name)
+
         template_str = dumps(self.content, indent=2)
-        with open(file=bundle_path, mode="w") as template_file:
+        with open(file=f"{bundle_path}.{file_ext}", mode="w") as template_file:
             template_file.write(template_str)
+
+        if deployments:
+            Path(bundle_path).mkdir(exist_ok=True)
+            for deployment in deployments:
+                with open(file=f"{bundle_path.joinpath(deployment[0])}.{file_ext}", mode="w") as template_file:
+                    template_file.write(dumps(deployment[1], indent=2))
 
 
 class TemplateGen:
@@ -1209,11 +1232,9 @@ def get_bundle_path(instance_name: str, bundle_dir: Optional[str] = None) -> Opt
     return bundle_pure_path
 
 
-def default_bundle_name(instance_name: str, file_ext: Optional[str] = "json") -> str:
+def default_bundle_name(instance_name: str) -> str:
     timestamp = get_timestamp_now_utc(format="%Y%m%dT%H%M%S")
     name = f"clone_{to_safe_filename(instance_name)}_{timestamp}_aio"
-    if file_ext:
-        name += ".json"
     return name
 
 
