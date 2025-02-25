@@ -821,12 +821,12 @@ def load_iotops_arguments(self, _):
         )
         context.argument(
             "instance_name",
-            options_list=["--from-instance", "-n"],
+            options_list=["--name", "-n"],
             help="The model instance to clone.",
         )
         context.argument(
             "resource_group_name",
-            options_list=["--from-group", "-g"],
+            options_list=["--resource-group", "-g"],
             help="The resource group the model instance to clone resides in.",
         )
         context.argument(

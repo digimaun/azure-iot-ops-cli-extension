@@ -339,6 +339,7 @@ class InstanceRestore:
         cluster_resource_id: str,
         template_content: "TemplateContent",
         user_assigned_mis: Optional[List[str]] = None,
+        template_mode: Optional[str] = None,
         no_progress: Optional[bool] = None,
     ):
         self.cmd = cmd
@@ -357,18 +358,18 @@ class InstanceRestore:
         )
         self.resource_client = get_resource_client(subscription_id=self.subscription_id)
         self.msi_client = get_msi_mgmt_client(subscription_id=self.subscription_id)
+        self.template_mode = template_mode
         self.user_assigned_mis = user_assigned_mis
         self.no_progress = no_progress
 
     def _deploy_template(
         self,
+        content: dict,
         parameters: dict,
         deployment_name: str,
         what_if: bool = False,
     ) -> Optional["LROPoller"]:
-        deployment_params = {
-            "properties": {"mode": "Incremental", "template": self.template_content.content, "parameters": parameters}
-        }
+        deployment_params = {"properties": {"mode": "Incremental", "template": content, "parameters": parameters}}
         if what_if:
             what_if_poller = self.resource_client.deployments.begin_what_if(
                 resource_group_name=self.resource_group_name,
@@ -444,8 +445,20 @@ class InstanceRestore:
         deployment_name = default_bundle_name(self.from_instance_name)
 
         DEFAULT_CONSOLE.print()
-        with DEFAULT_CONSOLE.status("Pre-flight..."):
+
+        deployment_work = []
+        if self.template_mode == TemplateMode.LINKED.value:
+            deployment_work.extend(self.template_content.get_split_content())
+        else:
+            deployment_work.append(self.template_content)
+        total_pages = len(deployment_work)
+
+        import pdb
+
+        pdb.set_trace()
+        with DEFAULT_CONSOLE.status("Pre-flight...") as console:
             self._deploy_template(
+                content=deployment_work[0],
                 parameters=parameters,
                 deployment_name=deployment_name,
                 what_if=True,
@@ -453,12 +466,19 @@ class InstanceRestore:
             # TODO
             self._handle_federation(use_self_hosted_issuer)
 
-            self._deploy_template(
-                parameters=parameters,
-                deployment_name=deployment_name,
-            )
-        deployment_link = self._get_deployment_link(deployment_name=deployment_name)
-        DEFAULT_CONSOLE.print(f"[link={deployment_link}]{self.cluster_name} deployment link[/link]")
+            for i in range(total_pages):
+                console.update(status=f"Deploying page {i+1}/{total_pages}")
+                poller = self._deploy_template(
+                    content=deployment_work[i],
+                    parameters=parameters,
+                    deployment_name=f"{deployment_name}_{i+1}",
+                )
+                deployment_link = self._get_deployment_link(deployment_name=f"{deployment_name}_{i+1}")
+                DEFAULT_CONSOLE.print(
+                    f"[link={deployment_link}]{self.cluster_name} deployment page {i+1} link[/link]", highlight=False
+                )
+                wait_for_terminal_state(poller)
+
         DEFAULT_CONSOLE.print()
 
     def _get_deployment_link(self, deployment_name: str) -> str:
@@ -479,6 +499,7 @@ def backup_ops_instance(
     to_instance_name: Optional[str] = None,
     to_cluster_id: Optional[str] = None,
     use_self_hosted_issuer: Optional[bool] = None,
+    linked_base_uri: Optional[str] = None,
     no_progress: Optional[bool] = None,
     confirm_yes: Optional[bool] = None,
     **kwargs,
@@ -506,10 +527,12 @@ def backup_ops_instance(
         return
 
     template_content = backup_state.get_content()
-    template_content.write(bundle_path, template_mode=template_mode)
+    template_content.write(bundle_path, template_mode=template_mode, linked_base_uri=linked_base_uri)
 
     if to_cluster_id:
-        restore_client = backup_state.get_restore_client(to_cluster_id=to_cluster_id, no_progress=no_progress)
+        restore_client = backup_state.get_restore_client(
+            to_cluster_id=to_cluster_id, template_mode=template_mode, no_progress=no_progress
+        )
         restore_client.deploy(instance_name=to_instance_name, use_self_hosted_issuer=use_self_hosted_issuer)
 
 
@@ -584,7 +607,9 @@ class BackupState:
     def get_content(self) -> "TemplateContent":
         return self.content
 
-    def get_restore_client(self, to_cluster_id: str, no_progress: Optional[bool] = None) -> "InstanceRestore":
+    def get_restore_client(
+        self, to_cluster_id: str, template_mode: str, no_progress: Optional[bool] = None
+    ) -> "InstanceRestore":
         return InstanceRestore(
             cmd=self.cmd,
             instances=self.instances,
@@ -592,6 +617,7 @@ class BackupState:
             cluster_resource_id=to_cluster_id,
             template_content=self.content,
             user_assigned_mis=self.user_assigned_mis,
+            template_mode=template_mode,
             no_progress=no_progress,
         )
 
@@ -955,7 +981,6 @@ class BackupManager:
     def _analyze_assets(self):
         nested_params = {
             **build_parameter(name=TemplateParams.CUSTOM_LOCATION_NAME.value),
-            **build_parameter(name=TemplateParams.INSTANCE_NAME.value),
         }
         instance_resource_id_expr = get_resource_id_by_param(
             "microsoft.iotoperations/instances", TemplateParams.INSTANCE_NAME
@@ -992,7 +1017,6 @@ class BackupManager:
     def _analyze_secretsync(self):
         nested_params = {
             **build_parameter(name=TemplateParams.CUSTOM_LOCATION_NAME.value),
-            **build_parameter(name=TemplateParams.INSTANCE_NAME.value),
         }
         ssc_client = self.instances.ssc_mgmt_client
         ssc_api_version = ssc_client._config.api_version
@@ -1063,7 +1087,7 @@ class BackupManager:
     ):
         data_iter = list(data_iter)
         if data_iter:
-            chunked_list_data = chunk_list2(data_iter, self.chunk_size, 900)
+            chunked_list_data = chunk_list2(data_iter, self.chunk_size, 750)
 
             for chunk in chunked_list_data:
                 symbolic_name, deployment_name = self.add_deployment_by_key(key)
@@ -1112,10 +1136,35 @@ class TemplateContent:
             "microsoft.deviceregistry/assets": 0,
             "microsoft.deviceregistry/assetendpointprofiles": 0,
         }
+        self.copy_params = {"clusterName", "customLocationName", "resourceSlug", "instanceName"}
 
-    def _get_deployments(self, root_dir: str) -> List[Tuple[str, dict]]:
+    def get_split_content(self) -> List[dict]:
+        result = [self.content]
+        parameters = self.content.get("parameters", {})
+        resources: Dict[str, Dict[str, dict]] = self.content.get("resources", {})
+        for key in list(resources.keys()):
+            if resources[key].get("type", "").lower() != "microsoft.resources/deployments":
+                continue
+            nested_resources: List[dict] = resources[key]["properties"]["template"].get("resources", [])
+            if not nested_resources:
+                continue
+            nested_type = nested_resources[0].get("type", "").lower()
+            if nested_type not in self.linked_type_map:
+                continue
+
+            for param in self.copy_params:
+                resources[key]["properties"]["template"]["parameters"][param] = parameters[param]
+
+            result.append(resources[key]["properties"].pop("template"))
+            del resources[key]
+        return result
+
+    def _get_deployments(self, root_dir: str, linked_base_uri: Optional[str] = None) -> List[Tuple[str, dict]]:
         result = []
-        resources: Dict[str, dict] = self.content.get("resources", {})
+        resources: Dict[str, Dict[str, dict]] = self.content.get("resources", {})
+        if linked_base_uri and root_dir:
+            sep = "" if linked_base_uri.endswith("/") else "/"
+            root_dir = f"{linked_base_uri}{sep}{root_dir}"
         for key in resources:
             if resources[key].get("type", "").lower() != "microsoft.resources/deployments":
                 continue
@@ -1130,19 +1179,28 @@ class TemplateContent:
             kind = nested_type.split("/")[-1]
             linked_name = f"{kind}_{self.linked_type_map[nested_type]}"
             linked_rel_path = f"{root_dir}/{linked_name}.json"
-            resources[key]["properties"]["templateLink"] = {"relativePath": linked_rel_path}
+
+            template_link = {"relativePath": linked_rel_path} if not linked_base_uri else {"uri": linked_rel_path}
+            resources[key]["properties"]["templateLink"] = template_link
+
             result.append((linked_name, resources[key]["properties"]["template"]))
             del resources[key]["properties"]["template"]
 
         return result
 
-    def write(self, bundle_path: PurePath, template_mode: Optional[str] = None, file_ext: str = "json"):
+    def write(
+        self,
+        bundle_path: PurePath,
+        template_mode: Optional[str] = None,
+        linked_base_uri: Optional[str] = None,
+        file_ext: str = "json",
+    ):
         if not bundle_path:
             return
 
         deployments = None
-        if template_mode == "linked":
-            deployments = self._get_deployments(bundle_path.name)
+        if template_mode == TemplateMode.LINKED.value:
+            deployments = self._get_deployments(bundle_path.name, linked_base_uri)
 
         template_str = dumps(self.content, indent=2)
         with open(file=f"{bundle_path}.{file_ext}", mode="w") as template_file:
