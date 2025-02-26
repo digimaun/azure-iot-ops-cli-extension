@@ -427,7 +427,7 @@ class WorkManager:
                     extension_ids=[self.ops_extension_dependencies[EXTENSION_TYPE_PLATFORM]["id"]]
                 )
                 instance_content, instance_parameters = self._targets.get_ops_instance_template(
-                    cl_extension_ids=[], extension_only=True
+                    phase=1,
                 )
                 instance_work_name = self._work_format_str.format(op="extension")
                 instance_poller = self._deploy_template(
@@ -447,19 +447,14 @@ class WorkManager:
                 ##
                 instance_work_name = self._work_format_str.format(op="instance")
                 instance_content, instance_parameters = self._targets.get_ops_instance_template(
-                    cl_extension_ids=[
-                        self.ops_extension_dependencies[ext]["id"]
-                        for ext in [EXTENSION_TYPE_PLATFORM, EXTENSION_TYPE_SSC]
-                    ],
+                    phase=2,
                 )
-                import pdb; pdb.set_trace()
-                self._deploy_template(
-                    content=instance_content,
-                    parameters=instance_parameters,
-                    deployment_name=instance_work_name,
-                    what_if=True,
-                )
-                import pdb; pdb.set_trace()
+                # self._deploy_template(
+                #     content=instance_content,
+                #     parameters=instance_parameters,
+                #     deployment_name=instance_work_name,
+                #     what_if=True,
+                # )
                 self._complete_step(
                     category=WorkCategoryKey.DEPLOY_IOT_OPS,
                     completed_step=WorkStepKey.WHAT_IF_INSTANCE,
@@ -470,6 +465,15 @@ class WorkManager:
                     parameters=instance_parameters,
                     deployment_name=instance_work_name,
                 )
+
+                instance_content, instance_parameters = self._targets.get_ops_instance_template()
+                instance_work_name = self._work_format_str.format(op="instance.resources")
+                instance_poller = self._deploy_template(
+                    content=instance_content,
+                    parameters=instance_parameters,
+                    deployment_name=instance_work_name,
+                )
+                _ = wait_for_terminal_state(instance_poller)
                 # Pattern needs work, it is this way to dynamically update UI
                 self._display.categories[WorkCategoryKey.DEPLOY_IOT_OPS][0].title = (
                     f"[link={self._get_deployment_link(instance_work_name)}]"

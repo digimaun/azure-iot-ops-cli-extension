@@ -173,9 +173,11 @@ class InitTargets:
 
     def get_ops_instance_template(
         self,
-        cl_extension_ids: List[str],
-        extension_only: Optional[bool] = False,
+        cl_extension_ids: Optional[List[str]] = None,
+        phase: Optional[int] = None,
     ) -> Tuple[dict, dict]:
+        if not cl_extension_ids:
+            cl_extension_ids = []
         template, parameters = self._handle_apply_targets(
             param_to_target={
                 "clusterName": self.cluster_name,
@@ -204,30 +206,42 @@ class InitTargets:
         if self.ops_train:
             template.content["variables"]["TRAINS"]["iotOperations"] = self.ops_train
 
-        if extension_only:
-            resources: dict = template.content.get("resources", {})
-            for k in list(resources.keys()):
-                if k not in ["cluster", "aio_extension"]:
-                    del resources[k]
-            return template.content, parameters
-
-        extension_config: dict = template.content["resources"].get("aio_extension", {})
-        for k in list(extension_config.keys()):
-            if k not in ["type", "apiVersion", "name"]:
-                del extension_config[k]
-        extension_config["existing"] = True
-
-        cl_config: dict = template.content["resources"].get("customLocation", {})
-        for k in list(cl_config.keys()):
-            if k not in ["type", "apiVersion", "name"]:
-                del cl_config[k]
-        cl_config["existing"] = True
-
         instance = template.get_resource_by_key("aioInstance")
         instance["properties"]["description"] = self.instance_description
+        if self.instance_name:
+            instance["name"] = self.instance_name
 
         if self.tags:
             instance["tags"] = self.tags
+
+        phase_1_keys = ["cluster", "aio_extension"]
+        phase_2_keys = ["aioInstance", "aio_syncRule", "deviceRegistry_syncRule"]
+
+        resources: Dict[str, Dict[str, dict]] = template.content.get("resources", {})
+
+        def __set_read_only(resource_keys: List[str]):
+            for r in resource_keys:
+                res: dict = resources.get(r, {})
+                for k in list(res.keys()):
+                    if k not in ["type", "apiVersion", "name", "scope", "condition"]:
+                        del res[k]
+                res["existing"] = True
+
+        def __del_if_not_in(include_keys: List[str]):
+            for k in list(resources.keys()):
+                if k not in include_keys:
+                    del resources[k]
+
+        if phase == 1:
+            __del_if_not_in(phase_1_keys)
+            return template.content, parameters
+
+        if phase == 2:
+            __del_if_not_in(phase_1_keys + phase_2_keys + ["customLocation"])
+            __set_read_only(phase_1_keys + ["customLocation"])
+            return template.content, parameters
+
+        __set_read_only(phase_1_keys + phase_2_keys + ["customLocation"])
 
         broker = template.get_resource_by_key("broker")
         broker_authn = template.get_resource_by_key("broker_authn")
@@ -236,7 +250,6 @@ class InitTargets:
         dataflow_endpoint = template.get_resource_by_key("dataflow_endpoint")
 
         if self.instance_name:
-            instance["name"] = self.instance_name
             broker["name"] = f"{self.instance_name}/{DEFAULT_BROKER}"
             broker_authn["name"] = f"{self.instance_name}/{DEFAULT_BROKER}/{DEFAULT_BROKER_AUTHN}"
             broker_listener["name"] = f"{self.instance_name}/{DEFAULT_BROKER}/{DEFAULT_BROKER_LISTENER}"
