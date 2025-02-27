@@ -27,6 +27,7 @@ from ...util.az_client import (
     parse_resource_id,
     wait_for_terminal_state,
 )
+from ...util.common import insert_newlines
 from .common import (
     EXTENSION_TYPE_OPS,
     EXTENSION_TYPE_PLATFORM,
@@ -56,8 +57,8 @@ class WorkStepKey(IntEnum):
     ENUMERATE_PRE_FLIGHT = 2
     WHAT_IF_ENABLEMENT = 3
     DEPLOY_ENABLEMENT = 4
-    WHAT_IF_INSTANCE = 5
-    DEPLOY_INSTANCE = 6
+    DEPLOY_INSTANCE = 5
+    DEPLOY_RESOURCES = 6
 
 
 class WorkRecord:
@@ -174,12 +175,16 @@ class WorkManager:
             self._display.add_category(
                 WorkCategoryKey.DEPLOY_IOT_OPS, "Deploy IoT Operations", False, self._format_instance_desc()
             )
-            self._display.add_step(WorkCategoryKey.DEPLOY_IOT_OPS, WorkStepKey.WHAT_IF_INSTANCE, "Create extension")
             self._display.add_step(
                 WorkCategoryKey.DEPLOY_IOT_OPS,
                 WorkStepKey.DEPLOY_INSTANCE,
                 f"Create instance [cyan]{self._targets.instance_name}",
                 self._format_instance_config_desc(),
+            )
+            self._display.add_step(
+                WorkCategoryKey.DEPLOY_IOT_OPS,
+                WorkStepKey.DEPLOY_RESOURCES,
+                "Apply default resources",
             )
 
     def _process_connected_cluster(self):
@@ -421,8 +426,7 @@ class WorkManager:
                     api_version=REGISTRY_PREVIEW_API_VERSION,
                 )
                 self._process_extension_dependencies()
-                ##
-                self._render_display(category=WorkCategoryKey.DEPLOY_IOT_OPS, active_step=WorkStepKey.WHAT_IF_INSTANCE)
+                self._render_display(category=WorkCategoryKey.DEPLOY_IOT_OPS, active_step=WorkStepKey.DEPLOY_INSTANCE)
                 _ = self._create_or_update_custom_location(
                     extension_ids=[self.ops_extension_dependencies[EXTENSION_TYPE_PLATFORM]["id"]]
                 )
@@ -430,12 +434,13 @@ class WorkManager:
                     phase=1,
                 )
                 instance_work_name = self._work_format_str.format(op="extension")
-                instance_poller = self._deploy_template(
-                    content=instance_content,
-                    parameters=instance_parameters,
-                    deployment_name=instance_work_name,
+                _ = wait_for_terminal_state(
+                    self._deploy_template(
+                        content=instance_content,
+                        parameters=instance_parameters,
+                        deployment_name=instance_work_name,
+                    )
                 )
-                _ = wait_for_terminal_state(instance_poller)
                 self._create_or_update_custom_location(
                     extension_ids=[
                         self.ops_extension_dependencies[ext]["id"]
@@ -443,29 +448,22 @@ class WorkManager:
                     ]
                     + [self.ops_extension["id"]]
                 )
-
-                ##
                 instance_work_name = self._work_format_str.format(op="instance")
                 instance_content, instance_parameters = self._targets.get_ops_instance_template(
                     phase=2,
                 )
-                # self._deploy_template(
-                #     content=instance_content,
-                #     parameters=instance_parameters,
-                #     deployment_name=instance_work_name,
-                #     what_if=True,
-                # )
+                _ = wait_for_terminal_state(
+                    self._deploy_template(
+                        content=instance_content,
+                        parameters=instance_parameters,
+                        deployment_name=instance_work_name,
+                    )
+                )
                 self._complete_step(
                     category=WorkCategoryKey.DEPLOY_IOT_OPS,
-                    completed_step=WorkStepKey.WHAT_IF_INSTANCE,
-                    active_step=WorkStepKey.DEPLOY_INSTANCE,
+                    completed_step=WorkStepKey.DEPLOY_INSTANCE,
+                    active_step=WorkStepKey.DEPLOY_RESOURCES,
                 )
-                instance_poller = self._deploy_template(
-                    content=instance_content,
-                    parameters=instance_parameters,
-                    deployment_name=instance_work_name,
-                )
-
                 instance_content, instance_parameters = self._targets.get_ops_instance_template()
                 instance_work_name = self._work_format_str.format(op="instance.resources")
                 instance_poller = self._deploy_template(
@@ -473,7 +471,6 @@ class WorkManager:
                     parameters=instance_parameters,
                     deployment_name=instance_work_name,
                 )
-                _ = wait_for_terminal_state(instance_poller)
                 # Pattern needs work, it is this way to dynamically update UI
                 self._display.categories[WorkCategoryKey.DEPLOY_IOT_OPS][0].title = (
                     f"[link={self._get_deployment_link(instance_work_name)}]"
@@ -633,12 +630,28 @@ class WorkManager:
         )
 
     def _create_or_update_custom_location(self, extension_ids: Iterable[str]) -> dict:
-        return self.custom_locations.create(
-            name=self._targets.custom_location_name,
-            resource_group_name=self._targets.resource_group_name,
-            host_resource_id=self._resource_map.connected_cluster.resource_id,
-            namespace=self._targets.cluster_namespace,
-            display_name=self._targets.custom_location_name,
-            location=self._targets.location,
-            cluster_extension_ids=extension_ids,
-        )
+
+        try:
+            test = self.custom_locations.create(
+                name=self._targets.custom_location_name,
+                resource_group_name=self._targets.resource_group_name,
+                host_resource_id=self._resource_map.connected_cluster.resource_id,
+                namespace=self._targets.cluster_namespace,
+                display_name=self._targets.custom_location_name,
+                location=self._targets.location,
+                cluster_extension_ids=extension_ids,
+            )
+        except HttpResponseError as http_exc:
+            if http_exc.error.code == "UnauthorizedNamespaceError":
+                explain = (
+                    "[IoT Ops explanation]\n\nThis error generally happens for two reasons.\n"
+                    "- The arc custom locations feature was not enabled.\n"
+                    "- The arc custom locations feature was not enabled with the correct OID.\n\n"
+                    "To resolve the issue, re-run create after applying the instructions at the aka.ms "
+                    "link provided in the error."
+                )
+                cl_error_prefix = "Custom Locations Error:\n"
+                raise ValidationError(
+                    f"{insert_newlines(f'{cl_error_prefix}{http_exc.error.message}', 120)}\n\n{explain}"
+                )
+            raise http_exc
