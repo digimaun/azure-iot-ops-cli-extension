@@ -338,10 +338,6 @@ class WorkManager:
         return self._do_work()
 
     def _do_work(self):
-        from .base import (
-            verify_custom_location_namespace,
-            verify_custom_locations_enabled,
-        )
         from .host import verify_cli_client_connections
         from .permissions import verify_write_permission_against_rg
         from .rp_namespace import register_providers
@@ -354,7 +350,6 @@ class WorkManager:
 
             # Pre-Flight workflow
             if self._pre_flight:
-
                 # WorkStepKey.REG_RP
                 self._render_display(category=WorkCategoryKey.PRE_FLIGHT, active_step=WorkStepKey.REG_RP)
                 register_providers(self.subscription_id)
@@ -365,14 +360,6 @@ class WorkManager:
                 )
 
                 # WorkStepKey.ENUMERATE_PRE_FLIGHT
-                # TODO @digimaun - cluster checks
-                if False:
-                    verify_custom_locations_enabled(self.cmd)
-                    verify_custom_location_namespace(
-                        connected_cluster=self._resource_map.connected_cluster,
-                        custom_location_name=self._targets.custom_location_name,
-                        namespace=self._targets.cluster_namespace,
-                    )
                 if self._targets.deploy_resource_sync_rules and self._targets.instance_name:
                     # TODO - @digimaun use permission manager after fixing check access issue
                     verify_write_permission_against_rg(
