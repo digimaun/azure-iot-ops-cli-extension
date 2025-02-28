@@ -427,21 +427,21 @@ class WorkManager:
                 )
                 self._process_extension_dependencies()
                 self._render_display(category=WorkCategoryKey.DEPLOY_IOT_OPS, active_step=WorkStepKey.DEPLOY_INSTANCE)
-                _ = self._create_or_update_custom_location(
+                self._create_or_update_custom_location(
                     extension_ids=[self.ops_extension_dependencies[EXTENSION_TYPE_PLATFORM]["id"]]
                 )
                 instance_content, instance_parameters = self._targets.get_ops_instance_template(
                     phase=InstancePhase.EXT,
                 )
                 instance_work_name = self._work_format_str.format(op="extension")
-                _ = wait_for_terminal_state(
+                wait_for_terminal_state(
                     self._deploy_template(
                         content=instance_content,
                         parameters=instance_parameters,
                         deployment_name=instance_work_name,
                     )
                 )
-                _ = self._create_or_update_custom_location(
+                self._create_or_update_custom_location(
                     extension_ids=[
                         self.ops_extension_dependencies[ext]["id"]
                         for ext in [EXTENSION_TYPE_PLATFORM, EXTENSION_TYPE_SSC]
@@ -452,7 +452,7 @@ class WorkManager:
                 instance_content, instance_parameters = self._targets.get_ops_instance_template(
                     phase=InstancePhase.INSTANCE,
                 )
-                _ = wait_for_terminal_state(
+                wait_for_terminal_state(
                     self._deploy_template(
                         content=instance_content,
                         parameters=instance_parameters,
@@ -464,7 +464,9 @@ class WorkManager:
                     completed_step=WorkStepKey.DEPLOY_INSTANCE,
                     active_step=WorkStepKey.DEPLOY_RESOURCES,
                 )
-                instance_content, instance_parameters = self._targets.get_ops_instance_template(InstancePhase.RESOURCES)
+                instance_content, instance_parameters = self._targets.get_ops_instance_template(
+                    phase=InstancePhase.RESOURCES
+                )
                 instance_work_name = self._work_format_str.format(op="resources")
                 instance_poller = self._deploy_template(
                     content=instance_content,
@@ -477,7 +479,7 @@ class WorkManager:
                     f"{self._display.categories[WorkCategoryKey.DEPLOY_IOT_OPS][0].title}[/link]"
                 )
                 self._render_display(category=WorkCategoryKey.DEPLOY_IOT_OPS)
-                _ = wait_for_terminal_state(instance_poller)
+                wait_for_terminal_state(instance_poller)
                 self._apply_sr_role_assignment()
 
                 self._complete_step(

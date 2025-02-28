@@ -48,8 +48,11 @@ class CustomLocations(Queryable):
                 cluster_extension_ids,
             ),
         }
+
+        parameters = {"properties": properties, "location": location}
+
         if tags:
-            properties["tags"] = tags
+            parameters["tags"] = tags
 
         if display_name:
             properties["displayName"] = display_name
@@ -57,7 +60,7 @@ class CustomLocations(Queryable):
         poller = self.ops.begin_create_or_update(
             resource_group_name=resource_group_name,
             resource_name=name,
-            parameters={"properties": properties, "location": location},
+            parameters=parameters,
         )
 
         return wait_for_terminal_state(poller, **kwargs)
