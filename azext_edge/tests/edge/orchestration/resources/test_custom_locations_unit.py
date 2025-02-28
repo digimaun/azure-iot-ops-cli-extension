@@ -9,7 +9,6 @@ from typing import Optional, List
 
 import pytest
 import responses
-from azure.cli.core.azclierror import AzureResponseError, ValidationError
 
 from azext_edge.edge.providers.orchestration.resources.custom_locations import CustomLocations
 
@@ -18,7 +17,6 @@ from .conftest import (
     ZEROED_SUBSCRIPTION,
     get_base_endpoint,
     get_mock_resource,
-    get_resource_id,
 )
 
 CUSTOM_LOCATION_RP = "Microsoft.ExtendedLocation"
