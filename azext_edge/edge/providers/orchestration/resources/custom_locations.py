@@ -38,6 +38,7 @@ class CustomLocations(Queryable):
         cluster_extension_ids: Iterable[str],
         location: str,
         display_name: Optional[str] = None,
+        tags: Optional[dict] = None,
         **kwargs
     ) -> dict:
         properties = {
@@ -47,6 +48,9 @@ class CustomLocations(Queryable):
                 cluster_extension_ids,
             ),
         }
+        if tags:
+            properties["tags"] = tags
+
         if display_name:
             properties["displayName"] = display_name
 

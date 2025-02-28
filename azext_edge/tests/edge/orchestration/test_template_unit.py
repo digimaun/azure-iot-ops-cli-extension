@@ -61,10 +61,10 @@ def test_enablement_template():
     assert TEMPLATE_BLUEPRINT_ENABLEMENT.content
 
     for resource in EXPECTED_EXTENSION_RESOURCE_KEYS:
-        assert TEMPLATE_BLUEPRINT_ENABLEMENT.get_resource_by_key(resource)
+        assert TEMPLATE_BLUEPRINT_ENABLEMENT.get_resource_by_key(resource)["properties"]
 
     for definition in EXPECTED_SHARED_DEFINITION_KEYS:
-        assert TEMPLATE_BLUEPRINT_ENABLEMENT.get_type_definition(definition)
+        assert TEMPLATE_BLUEPRINT_ENABLEMENT.get_type_definition(definition)["properties"]
 
 
 def test_instance_template():
@@ -72,10 +72,10 @@ def test_instance_template():
     assert TEMPLATE_BLUEPRINT_INSTANCE.content
 
     for resource in EXPECTED_INSTANCE_RESOURCE_KEYS:
-        assert TEMPLATE_BLUEPRINT_INSTANCE.get_resource_by_key(resource)
+        assert TEMPLATE_BLUEPRINT_INSTANCE.get_resource_by_key(resource)["properties"]
 
     for definition in EXPECTED_SHARED_DEFINITION_KEYS:
-        assert TEMPLATE_BLUEPRINT_INSTANCE.get_type_definition(definition)
+        assert TEMPLATE_BLUEPRINT_INSTANCE.get_type_definition(definition)["properties"]
 
     instance = TEMPLATE_BLUEPRINT_INSTANCE.get_resource_by_type("Microsoft.IoTOperations/instances")
     assert instance and isinstance(instance, dict)

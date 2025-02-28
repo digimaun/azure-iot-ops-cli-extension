@@ -4,8 +4,9 @@
 # Licensed under the MIT License. See License file in the project root for license information.
 # ----------------------------------------------------------------------------------------------
 
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple, Set
 from functools import partial
+from enum import IntEnum
 
 from azure.cli.core.azclierror import InvalidArgumentValueError
 
@@ -29,6 +30,18 @@ from .template import (
     TemplateBlueprint,
     get_insecure_listener,
 )
+
+
+class InstancePhase(IntEnum):
+    EXT = 1
+    INSTANCE = 2
+    RESOURCES = 3
+
+
+PHASE_KEY_MAP: Dict[str, Set[str]] = {
+    InstancePhase.EXT: {"cluster", "aio_extension"},
+    InstancePhase.INSTANCE: {"aioInstance", "aio_syncRule", "deviceRegistry_syncRule"},
+}
 
 
 class InitTargets:
@@ -174,7 +187,7 @@ class InitTargets:
     def get_ops_instance_template(
         self,
         cl_extension_ids: Optional[List[str]] = None,
-        phase: Optional[int] = None,
+        phase: Optional[InstancePhase] = None,
     ) -> Tuple[dict, dict]:
         if not cl_extension_ids:
             cl_extension_ids = []
@@ -207,49 +220,16 @@ class InitTargets:
             template.content["variables"]["TRAINS"]["iotOperations"] = self.ops_train
 
         instance = template.get_resource_by_key("aioInstance")
-        instance["properties"]["description"] = self.instance_description
-        if self.instance_name:
-            instance["name"] = self.instance_name
-
-        if self.tags:
-            instance["tags"] = self.tags
-
-        phase_1_keys = ["cluster", "aio_extension"]
-        phase_2_keys = ["aioInstance", "aio_syncRule", "deviceRegistry_syncRule"]
-
-        resources: Dict[str, Dict[str, dict]] = template.content.get("resources", {})
-
-        def __set_read_only(resource_keys: List[str]):
-            for r in resource_keys:
-                res: dict = resources.get(r, {})
-                for k in list(res.keys()):
-                    if k not in ["type", "apiVersion", "name", "scope", "condition"]:
-                        del res[k]
-                res["existing"] = True
-
-        def __del_if_not_in(include_keys: List[str]):
-            for k in list(resources.keys()):
-                if k not in include_keys:
-                    del resources[k]
-
-        if phase == 1:
-            __del_if_not_in(phase_1_keys)
-            return template.content, parameters
-
-        if phase == 2:
-            __del_if_not_in(phase_1_keys + phase_2_keys + ["customLocation"])
-            __set_read_only(phase_1_keys + ["customLocation"])
-            return template.content, parameters
-
-        __set_read_only(phase_1_keys + phase_2_keys + ["customLocation"])
-
         broker = template.get_resource_by_key("broker")
         broker_authn = template.get_resource_by_key("broker_authn")
         broker_listener = template.get_resource_by_key("broker_listener")
         dataflow_profile = template.get_resource_by_key("dataflow_profile")
         dataflow_endpoint = template.get_resource_by_key("dataflow_endpoint")
 
+        instance["properties"]["description"] = self.instance_description
+
         if self.instance_name:
+            instance["name"] = self.instance_name
             broker["name"] = f"{self.instance_name}/{DEFAULT_BROKER}"
             broker_authn["name"] = f"{self.instance_name}/{DEFAULT_BROKER}/{DEFAULT_BROKER_AUTHN}"
             broker_listener["name"] = f"{self.instance_name}/{DEFAULT_BROKER}/{DEFAULT_BROKER_LISTENER}"
@@ -257,6 +237,9 @@ class InitTargets:
             dataflow_endpoint["name"] = f"{self.instance_name}/{DEFAULT_DATAFLOW_ENDPOINT}"
 
             template.content["outputs"]["aio"]["value"]["name"] = self.instance_name
+
+        if self.tags:
+            instance["tags"] = self.tags
 
         if self.custom_broker_config:
             if "properties" in self.custom_broker_config:
@@ -268,6 +251,25 @@ class InitTargets:
                 resource_key="broker_listener_insecure",
                 resource_def=get_insecure_listener(instance_name=self.instance_name, broker_name=DEFAULT_BROKER),
             )
+
+        resources: Dict[str, Dict[str, dict]] = template.content.get("resources", {})
+        if phase == InstancePhase.EXT:
+            del_if_not_in(resources, PHASE_KEY_MAP[InstancePhase.EXT])
+            return template.content, parameters
+
+        tracked_keys = (
+            PHASE_KEY_MAP[InstancePhase.EXT].union(PHASE_KEY_MAP[InstancePhase.INSTANCE]).union({"customLocation"})
+        )
+        if phase == InstancePhase.INSTANCE:
+            del_if_not_in(
+                resources,
+                tracked_keys,
+            )
+            set_read_only(resources, PHASE_KEY_MAP[InstancePhase.EXT].union({"customLocation"}))
+            return template.content, parameters
+
+        if phase == InstancePhase.RESOURCES:
+            set_read_only(resources, tracked_keys)
 
         return template.content, parameters
 
@@ -349,3 +351,18 @@ class InitTargets:
 
 def get_default_cl_name(resource_group_name: str, cluster_name: str, namespace: str) -> str:
     return "location-" + url_safe_hash_phrase(f"{resource_group_name}{cluster_name}{namespace}")[:5]
+
+
+def set_read_only(resources: Dict[str, Dict[str, dict]], resource_keys: Set[str]):
+    for r in resource_keys:
+        res: dict = resources.get(r, {})
+        for k in list(res.keys()):
+            if k not in ["type", "apiVersion", "name", "scope", "condition"]:
+                del res[k]
+        res["existing"] = True
+
+
+def del_if_not_in(resources: Dict[str, Dict[str, dict]], include_keys: Set[str]):
+    for k in list(resources.keys()):
+        if k not in include_keys:
+            del resources[k]

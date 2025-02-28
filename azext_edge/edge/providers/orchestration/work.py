@@ -38,7 +38,7 @@ from .common import (
 from .resources.custom_locations import CustomLocations
 from .permissions import ROLE_DEF_FORMAT_STR, PermissionManager, PrincipalType
 from .resource_map import IoTOperationsResourceMap
-from .targets import InitTargets
+from .targets import InitTargets, InstancePhase
 
 logger = get_logger(__name__)
 
@@ -431,7 +431,7 @@ class WorkManager:
                     extension_ids=[self.ops_extension_dependencies[EXTENSION_TYPE_PLATFORM]["id"]]
                 )
                 instance_content, instance_parameters = self._targets.get_ops_instance_template(
-                    phase=1,
+                    phase=InstancePhase.EXT,
                 )
                 instance_work_name = self._work_format_str.format(op="extension")
                 _ = wait_for_terminal_state(
@@ -441,7 +441,7 @@ class WorkManager:
                         deployment_name=instance_work_name,
                     )
                 )
-                self._create_or_update_custom_location(
+                _ = self._create_or_update_custom_location(
                     extension_ids=[
                         self.ops_extension_dependencies[ext]["id"]
                         for ext in [EXTENSION_TYPE_PLATFORM, EXTENSION_TYPE_SSC]
@@ -450,7 +450,7 @@ class WorkManager:
                 )
                 instance_work_name = self._work_format_str.format(op="instance")
                 instance_content, instance_parameters = self._targets.get_ops_instance_template(
-                    phase=2,
+                    phase=InstancePhase.INSTANCE,
                 )
                 _ = wait_for_terminal_state(
                     self._deploy_template(
@@ -464,8 +464,8 @@ class WorkManager:
                     completed_step=WorkStepKey.DEPLOY_INSTANCE,
                     active_step=WorkStepKey.DEPLOY_RESOURCES,
                 )
-                instance_content, instance_parameters = self._targets.get_ops_instance_template()
-                instance_work_name = self._work_format_str.format(op="instance.resources")
+                instance_content, instance_parameters = self._targets.get_ops_instance_template(InstancePhase.RESOURCES)
+                instance_work_name = self._work_format_str.format(op="resources")
                 instance_poller = self._deploy_template(
                     content=instance_content,
                     parameters=instance_parameters,
@@ -630,9 +630,8 @@ class WorkManager:
         )
 
     def _create_or_update_custom_location(self, extension_ids: Iterable[str]) -> dict:
-
         try:
-            test = self.custom_locations.create(
+            return self.custom_locations.create(
                 name=self._targets.custom_location_name,
                 resource_group_name=self._targets.resource_group_name,
                 host_resource_id=self._resource_map.connected_cluster.resource_id,
@@ -640,6 +639,7 @@ class WorkManager:
                 display_name=self._targets.custom_location_name,
                 location=self._targets.location,
                 cluster_extension_ids=extension_ids,
+                tags=self._targets.tags,
             )
         except HttpResponseError as http_exc:
             if http_exc.error.code == "UnauthorizedNamespaceError":
@@ -652,6 +652,6 @@ class WorkManager:
                 )
                 cl_error_prefix = "Custom Locations Error:\n"
                 raise ValidationError(
-                    f"{insert_newlines(f'{cl_error_prefix}{http_exc.error.message}', 120)}\n\n{explain}"
+                    f"{insert_newlines(f'{cl_error_prefix}{http_exc.error.message}', 140)}\n\n{explain}"
                 )
             raise http_exc
