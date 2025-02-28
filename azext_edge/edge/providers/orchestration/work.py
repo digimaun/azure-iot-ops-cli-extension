@@ -7,7 +7,7 @@
 from enum import IntEnum
 from json import dumps
 from time import sleep
-from typing import TYPE_CHECKING, Dict, List, Optional, Tuple, Union, Iterable
+from typing import TYPE_CHECKING, Dict, Iterable, List, Optional, Tuple, Union
 from uuid import uuid4
 
 from azure.cli.core.azclierror import AzureResponseError, ValidationError
@@ -35,9 +35,9 @@ from .common import (
     OPS_EXTENSION_DEPS,
     ClusterConnectStatus,
 )
-from .resources.custom_locations import CustomLocations
 from .permissions import ROLE_DEF_FORMAT_STR, PermissionManager, PrincipalType
 from .resource_map import IoTOperationsResourceMap
+from .resources.custom_locations import CustomLocations
 from .targets import InitTargets, InstancePhase
 
 logger = get_logger(__name__)
