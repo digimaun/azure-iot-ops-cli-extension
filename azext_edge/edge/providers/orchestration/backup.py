@@ -450,12 +450,9 @@ class InstanceRestore:
         if self.template_mode == TemplateMode.LINKED.value:
             deployment_work.extend(self.template_content.get_split_content())
         else:
-            deployment_work.append(self.template_content)
+            deployment_work.append(self.template_content.content)
         total_pages = len(deployment_work)
 
-        import pdb
-
-        pdb.set_trace()
         with DEFAULT_CONSOLE.status("Pre-flight...") as console:
             self._deploy_template(
                 content=deployment_work[0],
@@ -467,7 +464,8 @@ class InstanceRestore:
             self._handle_federation(use_self_hosted_issuer)
 
             for i in range(total_pages):
-                console.update(status=f"Deploying page {i+1}/{total_pages}")
+                status = f"Initiating {deployment_name} {i+1}/{total_pages}"
+                console.update(status=status)
                 poller = self._deploy_template(
                     content=deployment_work[i],
                     parameters=parameters,
@@ -475,9 +473,11 @@ class InstanceRestore:
                 )
                 deployment_link = self._get_deployment_link(deployment_name=f"{deployment_name}_{i+1}")
                 DEFAULT_CONSOLE.print(
-                    f"[link={deployment_link}]{self.cluster_name} deployment page {i+1} link[/link]", highlight=False
+                    f"->[link={deployment_link}]Link to {self.cluster_name} deployment {i+1}/{total_pages}[/link]",
+                    highlight=False,
                 )
-                wait_for_terminal_state(poller)
+                if total_pages > 1:
+                    wait_for_terminal_state(poller)
 
         DEFAULT_CONSOLE.print()
 
