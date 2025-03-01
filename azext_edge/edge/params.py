@@ -843,6 +843,12 @@ def load_iotops_arguments(self, _):
             arg_group="To Local",
         )
         context.argument(
+            "linked_base_uri",
+            options_list=["--base-uri"],
+            help="Base URI to use for template links. If not provided a relative path strategy will be used.",
+            arg_group="To Local",
+        )
+        context.argument(
             "to_instance_name",
             options_list=["--to-instance"],
             help="The instance name that will be used when applying the clone. If omitted the "
@@ -865,5 +871,13 @@ def load_iotops_arguments(self, _):
             "to_cluster_id",
             options_list=["--to-cluster-id"],
             help="The resource Id of the connected cluster the clone will be applied to.",
+            arg_group="To Cluster",
+        )
+        context.argument(
+            "use_self_hosted_issuer",
+            options_list=["--self-hosted-issuer"],
+            arg_type=get_three_state_flag(),
+            help="Use the self-hosted oidc issuer for federation. Only applicable if "
+            "user-assigned managed identities are associated to the model instance.",
             arg_group="To Cluster",
         )
