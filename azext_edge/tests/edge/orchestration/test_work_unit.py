@@ -78,6 +78,9 @@ class CallKey(Enum):
     CREATE_CUSTOM_LOCATION = "createCustomLocation"
 
 
+CL_EXTENSION_TYPES = ["microsoft.azure.secretstore", "microsoft.iotoperations.platform", "microsoft.iotoperations"]
+
+
 class RequestKPIs(NamedTuple):
     method: str
     url: str
@@ -194,8 +197,14 @@ class ServiceGenerator:
                 assert request_kpis.params["api-version"] == ExpectedAPIVersion.CUSTOM_LOCATION.value
                 cl_payload = json.loads(request_kpis.body_str)
                 assert cl_payload["properties"]["hostResourceId"] == self.scenario["cluster"]["id"]
+                cl_create_call_len = len(self.call_map.get(CallKey.CREATE_CUSTOM_LOCATION, []))
+                expected_ext_ids = self.scenario["cluster"]["extensions"]["value"]
+                types_in_play = ["microsoft.iotoperations.platform"] if not cl_create_call_len else CL_EXTENSION_TYPES
+                expected_cl_ext_ids = set(
+                    ext["id"] for ext in expected_ext_ids if ext["properties"]["extensionType"] in types_in_play
+                )
+                assert set(cl_payload["properties"]["clusterExtensionIds"]) == expected_cl_ext_ids
                 self.call_map[CallKey.CREATE_CUSTOM_LOCATION].append(request_kpis)
-                # import pdb; pdb.set_trace()
                 return (200, STANDARD_HEADERS, request_kpis.body_str)
 
     def _handle_create(self, request_kpis: RequestKPIs):
@@ -785,18 +794,18 @@ def assert_create_displays(spy_work_displays: Dict[str, Mock], target_scenario: 
     pass
 
 
-def get_expected_keys_for(phase: InstancePhase) -> Set[str]:
+def get_expected_keys_for(phase: InstancePhase) -> Tuple[Set[str], Set[str]]:
     ext_keys = {"cluster", "aio_extension"}
     instance_keys = ext_keys.union({"customLocation", "aio_syncRule", "deviceRegistry_syncRule", "aioInstance"})
     resource_keys = instance_keys.union(
         {"broker", "broker_authn", "broker_listener", "dataflow_profile", "dataflow_endpoint"}
     )
     if phase == InstancePhase.EXT:
-        return ext_keys
+        return ext_keys, {}
     if phase == InstancePhase.INSTANCE:
-        return instance_keys
+        return instance_keys, ext_keys.union({"customLocation"})
     if phase == InstancePhase.RESOURCES:
-        return resource_keys
+        return resource_keys, ext_keys.union(instance_keys)
 
 
 def assert_instance_deployment_body(body_str: str, target_scenario: dict, phase: InstancePhase):
@@ -808,12 +817,16 @@ def assert_instance_deployment_body(body_str: str, target_scenario: dict, phase:
 
     template = body["properties"]["template"]
 
-    # import pdb; pdb.set_trace()
-
-    expected_keys = get_expected_keys_for(phase=phase)
+    expected_keys, readonly_keys = get_expected_keys_for(phase=phase)
     for key in expected_keys:
         assert template["resources"][key]
     assert len(template["resources"]) == len(expected_keys)
+
+    if readonly_keys:
+        for key in readonly_keys:
+            assert template["resources"][key]["existing"]
+            for rkey in template["resources"][key]:
+                assert rkey in {"type", "apiVersion", "name", "scope", "condition", "existing"}
 
     parameters = body["properties"]["parameters"]
     assert parameters["clusterName"]["value"] == target_scenario["cluster"]["name"]
@@ -829,7 +842,7 @@ def assert_instance_deployment_body(body_str: str, target_scenario: dict, phase:
             if ext["properties"]["extensionType"] in [EXTENSION_TYPE_PLATFORM, EXTENSION_TYPE_SSC]
         ]
     )
-    # assert set(parameters["clExtentionIds"]["value"]) == cl_extension_ids
+    assert set(parameters["clExtentionIds"]["value"]) == cl_extension_ids
     assert parameters["schemaRegistryId"]["value"] == target_scenario["schemaRegistry"]["id"]
     assert parameters["deployResourceSyncRules"]["value"] == bool(target_scenario["enableRsyncRules"])
 
@@ -863,19 +876,23 @@ def assert_instance_deployment_body(body_str: str, target_scenario: dict, phase:
         expected_trust_config = {"source": "CustomerManaged", "settings": assembled_settings}
     assert parameters["trustConfig"]["value"] == expected_trust_config
 
-    # instance_name: str = target_scenario["instance"]["name"]
-    # instance_name_lowered = instance_name.lower()
-    # resources = template["resources"]
-    # assert resources["aioInstance"]["name"] == instance_name_lowered
-    # assert resources["broker"]["name"] == f"{instance_name_lowered}/{DEFAULT_BROKER}"
-    # assert resources["broker_authn"]["name"] == f"{instance_name_lowered}/{DEFAULT_BROKER}/{DEFAULT_BROKER_AUTHN}"
-    # assert (
-    #     resources["broker_listener"]["name"] == f"{instance_name_lowered}/{DEFAULT_BROKER}/{DEFAULT_BROKER_LISTENER}"
-    # )
-    # assert resources["dataflow_profile"]["name"] == f"{instance_name_lowered}/{DEFAULT_DATAFLOW_PROFILE}"
-    # assert resources["dataflow_endpoint"]["name"] == f"{instance_name_lowered}/{DEFAULT_DATAFLOW_ENDPOINT}"
+    instance_name: str = target_scenario["instance"]["name"]
+    instance_name_lowered = instance_name.lower()
+    resources = template["resources"]
 
-    # if target_scenario["instance"]["description"]:
-    #     assert resources["aioInstance"]["properties"]["description"] == target_scenario["instance"]["description"]
-    # if target_scenario["instance"]["tags"]:
-    #     assert resources["aioInstance"]["tags"] == target_scenario["instance"]["tags"]
+    if phase in [InstancePhase.INSTANCE]:
+        assert resources["aioInstance"]["name"] == instance_name_lowered
+        if target_scenario["instance"]["description"]:
+            assert resources["aioInstance"]["properties"]["description"] == target_scenario["instance"]["description"]
+        if target_scenario["instance"]["tags"]:
+            assert resources["aioInstance"]["tags"] == target_scenario["instance"]["tags"]
+
+    if phase in [InstancePhase.RESOURCES]:
+        assert resources["broker"]["name"] == f"{instance_name_lowered}/{DEFAULT_BROKER}"
+        assert resources["broker_authn"]["name"] == f"{instance_name_lowered}/{DEFAULT_BROKER}/{DEFAULT_BROKER_AUTHN}"
+        assert (
+            resources["broker_listener"]["name"]
+            == f"{instance_name_lowered}/{DEFAULT_BROKER}/{DEFAULT_BROKER_LISTENER}"
+        )
+        assert resources["dataflow_profile"]["name"] == f"{instance_name_lowered}/{DEFAULT_DATAFLOW_PROFILE}"
+        assert resources["dataflow_endpoint"]["name"] == f"{instance_name_lowered}/{DEFAULT_DATAFLOW_ENDPOINT}"

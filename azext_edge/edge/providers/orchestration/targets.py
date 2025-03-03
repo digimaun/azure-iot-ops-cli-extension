@@ -357,7 +357,7 @@ def set_read_only(resources: Dict[str, Dict[str, dict]], resource_keys: Set[str]
     for r in resource_keys:
         res: dict = resources.get(r, {})
         for k in list(res.keys()):
-            if k not in ["type", "apiVersion", "name", "scope", "condition"]:
+            if k not in {"type", "apiVersion", "name", "scope", "condition"}:
                 del res[k]
         res["existing"] = True
 

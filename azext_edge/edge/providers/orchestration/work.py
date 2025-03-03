@@ -413,11 +413,15 @@ class WorkManager:
                     api_version=REGISTRY_PREVIEW_API_VERSION,
                 )
                 self._process_extension_dependencies()
+                dependency_ext_ids = [
+                    self.ops_extension_dependencies[ext]["id"] for ext in [EXTENSION_TYPE_PLATFORM, EXTENSION_TYPE_SSC]
+                ]
                 self._render_display(category=WorkCategoryKey.DEPLOY_IOT_OPS, active_step=WorkStepKey.DEPLOY_INSTANCE)
                 self._create_or_update_custom_location(
                     extension_ids=[self.ops_extension_dependencies[EXTENSION_TYPE_PLATFORM]["id"]]
                 )
                 instance_content, instance_parameters = self._targets.get_ops_instance_template(
+                    cl_extension_ids=dependency_ext_ids,
                     phase=InstancePhase.EXT,
                 )
                 instance_work_name = self._work_format_str.format(op="extension")
@@ -428,15 +432,10 @@ class WorkManager:
                         deployment_name=instance_work_name,
                     )
                 )
-                self._create_or_update_custom_location(
-                    extension_ids=[
-                        self.ops_extension_dependencies[ext]["id"]
-                        for ext in [EXTENSION_TYPE_PLATFORM, EXTENSION_TYPE_SSC]
-                    ]
-                    + [self.ops_extension["id"]]
-                )
+                self._create_or_update_custom_location(extension_ids=dependency_ext_ids + [self.ops_extension["id"]])
                 instance_work_name = self._work_format_str.format(op="instance")
                 instance_content, instance_parameters = self._targets.get_ops_instance_template(
+                    cl_extension_ids=dependency_ext_ids,
                     phase=InstancePhase.INSTANCE,
                 )
                 wait_for_terminal_state(
@@ -452,7 +451,7 @@ class WorkManager:
                     active_step=WorkStepKey.DEPLOY_RESOURCES,
                 )
                 instance_content, instance_parameters = self._targets.get_ops_instance_template(
-                    phase=InstancePhase.RESOURCES
+                    cl_extension_ids=dependency_ext_ids, phase=InstancePhase.RESOURCES
                 )
                 instance_work_name = self._work_format_str.format(op="resources")
                 instance_poller = self._deploy_template(
