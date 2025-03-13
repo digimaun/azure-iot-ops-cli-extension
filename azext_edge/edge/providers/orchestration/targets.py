@@ -3,9 +3,9 @@
 # Copyright (c) Microsoft Corporation. All rights reserved.
 # Licensed under the MIT License. See License file in the project root for license information.
 # ----------------------------------------------------------------------------------------------
-
+import re
 from enum import IntEnum
-from typing import Dict, List, Optional, Set, Tuple, NamedTuple
+from typing import Dict, List, NamedTuple, Optional, Set, Tuple
 
 from azure.cli.core.azclierror import InvalidArgumentValueError
 
@@ -61,6 +61,7 @@ class InitTargets:
         enable_rsync_rules: Optional[bool] = None,
         instance_name: Optional[str] = None,
         instance_description: Optional[str] = None,
+        instance_features: Optional[List[str]] = None,
         tags: Optional[dict] = None,
         enable_fault_tolerance: Optional[bool] = None,
         # Extension config
@@ -110,6 +111,7 @@ class InitTargets:
         self.deploy_resource_sync_rules = bool(enable_rsync_rules)
         self.instance_name = self._sanitize_k8s_name(instance_name)
         self.instance_description = instance_description
+        self.instance_features = parse_feature_kvp_nargs(instance_features)
         self.tags = tags
         self.enable_fault_tolerance = enable_fault_tolerance
 
@@ -275,6 +277,9 @@ class InitTargets:
 
         instance["properties"]["description"] = self.instance_description
 
+        if self.instance_features:
+            pass
+
         if self.instance_name:
             instance["name"] = self.instance_name
             broker["name"] = f"{self.instance_name}/{DEFAULT_BROKER}"
@@ -430,3 +435,40 @@ def get_default_ssc_config() -> Dict[str, str]:
         "rotationPollIntervalInSeconds": "120",
         "validatingAdmissionPolicies.applyPolicies": "false",
     }
+
+
+def parse_feature_kvp_nargs(features: Optional[List[str]] = None) -> Optional[Dict[str, dict]]:
+    features: Dict[str, str] = parse_kvp_nargs(features)
+    if not features:
+        return features
+
+    features_payload = {}
+    errors = []
+    mode_pattern = re.compile(r"^(a|b|c)\.mode$")
+    setting_pattern = re.compile(r"^(a|b|c)\.settings\.[^.\s]+$")
+
+    for key in features:
+        if not (mode_pattern.match(key) or setting_pattern.match(key)):
+            errors.append(
+                f"key {key} does not match pattern 'a.mode' or "
+                "'a.settings.{settingName}'."
+            )
+            continue
+
+        split_key = key.split(".")
+        split_key_len = len(split_key)
+        nested_key = "settings" if split_key_len >= 3 else "mode"
+        if split_key[0] not in features_payload:
+            features_payload[split_key[0]] = {}
+        if nested_key == "settings":
+            if "settings" not in features_payload[split_key[0]]:
+                features_payload[split_key[0]][nested_key] = {}
+            features_payload[split_key[0]][nested_key][split_key[2]] = features[key]
+        if nested_key == "mode":
+            features_payload[split_key[0]][nested_key] = features[key]
+
+    if errors:
+        raise InvalidArgumentValueError("\n".join(errors))
+
+    import pdb; pdb.set_trace()
+    return features_payload

@@ -478,6 +478,15 @@ def load_iotops_arguments(self, _):
                 "in favor of a user-provided configuration.",
                 arg_group="Trust",
             )
+            context.argument(
+                "instance_features",
+                options_list=["--feature"],
+                nargs="+",
+                action="extend",
+                help="Instance feature config. Format is space-separated key=value pairs."
+                "Keys have two kinds of syntax. Either `{componentName}.mode` or `{componentName}.settings.{settingName}`. "
+                "This option can be used one or more times.",
+            )
 
             for moniker in EXTENSION_MONIKER_TO_ALIAS_MAP:
                 alias = EXTENSION_MONIKER_TO_ALIAS_MAP[moniker]

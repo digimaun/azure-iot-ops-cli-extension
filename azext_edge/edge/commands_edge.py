@@ -152,6 +152,7 @@ def create_instance(
     custom_location_name: Optional[str] = None,
     enable_rsync_rules: Optional[bool] = None,
     instance_description: Optional[str] = None,
+    instance_features: Optional[List[str]] = None,
     dataflow_profile_instances: int = 1,
     trust_settings: Optional[List[str]] = None,
     # Akri
@@ -220,6 +221,7 @@ def create_instance(
         enable_rsync_rules=enable_rsync_rules,
         instance_name=instance_name,
         instance_description=instance_description,
+        instance_features=instance_features,
         add_insecure_listener=add_insecure_listener,
         dataflow_profile_instances=dataflow_profile_instances,
         trust_settings=trust_settings,
