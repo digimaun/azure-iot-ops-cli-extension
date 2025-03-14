@@ -3,7 +3,7 @@
 # Copyright (c) Microsoft Corporation. All rights reserved.
 # Licensed under the MIT License. See License file in the project root for license information.
 # ----------------------------------------------------------------------------------------------
-import re
+
 from enum import IntEnum
 from typing import Dict, List, NamedTuple, Optional, Set, Tuple
 
@@ -22,6 +22,7 @@ from ..orchestration.common import (
     TRUST_ISSUER_KIND_KEY,
     TRUST_SETTING_KEYS,
 )
+from ..orchestration.resources.instances import parse_feature_kvp_nargs
 from .common import KubernetesDistroType
 from .template import (
     TEMPLATE_BLUEPRINT_ENABLEMENT,
@@ -278,7 +279,7 @@ class InitTargets:
         instance["properties"]["description"] = self.instance_description
 
         if self.instance_features:
-            pass
+            instance["properties"]["features"] = self.instance_features
 
         if self.instance_name:
             instance["name"] = self.instance_name
@@ -435,40 +436,3 @@ def get_default_ssc_config() -> Dict[str, str]:
         "rotationPollIntervalInSeconds": "120",
         "validatingAdmissionPolicies.applyPolicies": "false",
     }
-
-
-def parse_feature_kvp_nargs(features: Optional[List[str]] = None) -> Optional[Dict[str, dict]]:
-    features: Dict[str, str] = parse_kvp_nargs(features)
-    if not features:
-        return features
-
-    features_payload = {}
-    errors = []
-    mode_pattern = re.compile(r"^(a|b|c)\.mode$")
-    setting_pattern = re.compile(r"^(a|b|c)\.settings\.[^.\s]+$")
-
-    for key in features:
-        if not (mode_pattern.match(key) or setting_pattern.match(key)):
-            errors.append(
-                f"key {key} does not match pattern 'a.mode' or "
-                "'a.settings.{settingName}'."
-            )
-            continue
-
-        split_key = key.split(".")
-        split_key_len = len(split_key)
-        nested_key = "settings" if split_key_len >= 3 else "mode"
-        if split_key[0] not in features_payload:
-            features_payload[split_key[0]] = {}
-        if nested_key == "settings":
-            if "settings" not in features_payload[split_key[0]]:
-                features_payload[split_key[0]][nested_key] = {}
-            features_payload[split_key[0]][nested_key][split_key[2]] = features[key]
-        if nested_key == "mode":
-            features_payload[split_key[0]][nested_key] = features[key]
-
-    if errors:
-        raise InvalidArgumentValueError("\n".join(errors))
-
-    import pdb; pdb.set_trace()
-    return features_payload

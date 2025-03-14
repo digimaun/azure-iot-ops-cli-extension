@@ -4,9 +4,10 @@
 # Licensed under the MIT License. See License file in the project root for license information.
 # ----------------------------------------------------------------------------------------------
 
-from typing import Iterable, List, Optional
+import re
+from typing import Dict, Iterable, List, Optional
 
-from azure.cli.core.azclierror import ValidationError
+from azure.cli.core.azclierror import InvalidArgumentValueError, ValidationError
 from azure.core.exceptions import ResourceNotFoundError
 from knack.log import get_logger
 from rich import print
@@ -21,7 +22,11 @@ from ....util.az_client import (
     parse_resource_id,
     wait_for_terminal_state,
 )
-from ....util.common import should_continue_prompt, url_safe_hash_phrase
+from ....util.common import (
+    parse_kvp_nargs,
+    should_continue_prompt,
+    url_safe_hash_phrase,
+)
 from ....util.queryable import Queryable
 from ..common import CUSTOM_LOCATIONS_API_VERSION, KEYVAULT_CLOUD_API_VERSION
 from ..permissions import ROLE_DEF_FORMAT_STR, PermissionManager
@@ -129,12 +134,19 @@ class Instances(Queryable):
         resource_group_name: str,
         tags: Optional[dict] = None,
         description: Optional[str] = None,
+        features: Optional[List[str]] = None,
         **kwargs: dict,
     ) -> dict:
         instance = kwargs.pop("instance", None) or self.show(name=name, resource_group_name=resource_group_name)
 
         if description:
             instance["properties"]["description"] = description
+
+        if features:
+            desired_features = parse_feature_kvp_nargs(features)
+            current_features: dict = instance["properties"].get("features", {})
+            current_features.update(desired_features)
+            instance["properties"]["features"] = current_features
 
         if tags or tags == {}:
             instance["tags"] = tags
@@ -543,3 +555,39 @@ class Instances(Queryable):
             cred_props: dict = cred["properties"]
             if cred_props.get("issuer") == issuer_url and cred_props.get("subject") == subject:
                 return cred
+
+
+def parse_feature_kvp_nargs(features: Optional[List[str]] = None) -> Optional[Dict[str, dict]]:
+    features: Dict[str, str] = parse_kvp_nargs(features)
+    if not features:
+        return features
+
+    features_payload = {}
+    errors = []
+    mode_pattern = re.compile(r"^(a|b|c)\.mode$")
+    setting_pattern = re.compile(r"^(a|b|c)\.settings\.[^.\s]+$")
+
+    for key in features:
+        if not (mode_pattern.match(key) or setting_pattern.match(key)):
+            errors.append(
+                f"key {key} does not match pattern 'a.mode' or "
+                "'a.settings.{settingName}'."
+            )
+            continue
+
+        split_key = key.split(".")
+        split_key_len = len(split_key)
+        nested_key = "settings" if split_key_len >= 3 else "mode"
+        if split_key[0] not in features_payload:
+            features_payload[split_key[0]] = {}
+        if nested_key == "settings":
+            if "settings" not in features_payload[split_key[0]]:
+                features_payload[split_key[0]][nested_key] = {}
+            features_payload[split_key[0]][nested_key][split_key[2]] = features[key]
+        if nested_key == "mode":
+            features_payload[split_key[0]][nested_key] = features[key]
+
+    if errors:
+        raise InvalidArgumentValueError("\n".join(errors))
+
+    return features_payload

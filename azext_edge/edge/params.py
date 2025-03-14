@@ -478,15 +478,6 @@ def load_iotops_arguments(self, _):
                 "in favor of a user-provided configuration.",
                 arg_group="Trust",
             )
-            context.argument(
-                "instance_features",
-                options_list=["--feature"],
-                nargs="+",
-                action="extend",
-                help="Instance feature config. Format is space-separated key=value pairs."
-                "Keys have two kinds of syntax. Either `{componentName}.mode` or `{componentName}.settings.{settingName}`. "
-                "This option can be used one or more times.",
-            )
 
             for moniker in EXTENSION_MONIKER_TO_ALIAS_MAP:
                 alias = EXTENSION_MONIKER_TO_ALIAS_MAP[moniker]
@@ -514,6 +505,18 @@ def load_iotops_arguments(self, _):
                         arg_group="Extension Config",
                         deprecate_info=context.deprecate(hide=True),
                     )
+
+    for cmd_space in ["iot ops create", "iot ops update"]:
+        with self.argument_context(cmd_space) as context:
+            context.argument(
+                "instance_features",
+                options_list=["--feature"],
+                nargs="+",
+                action="extend",
+                help="Instance feature config. Format is space-separated key=value pairs. "
+                "Keys have two kinds of syntax. Either `{componentName}.mode` "
+                "or `{componentName}.settings.{settingName}`. This option can be used one or more times.",
+            )
 
     with self.argument_context("iot ops upgrade") as context:
         for moniker in EXTENSION_MONIKER_TO_ALIAS_MAP:

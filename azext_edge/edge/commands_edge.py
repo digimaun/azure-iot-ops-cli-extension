@@ -350,6 +350,7 @@ def update_instance(
     resource_group_name: str,
     tags: Optional[str] = None,
     instance_description: Optional[str] = None,
+    instance_features: Optional[List[str]] = None,
     **kwargs,
 ) -> dict:
     return Instances(cmd).update(
@@ -357,6 +358,7 @@ def update_instance(
         resource_group_name=resource_group_name,
         tags=tags,
         description=instance_description,
+        features=instance_features,
         **kwargs,
     )
 
