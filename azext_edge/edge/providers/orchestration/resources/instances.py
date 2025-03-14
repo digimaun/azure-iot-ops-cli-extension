@@ -132,12 +132,14 @@ class Instances(Queryable):
         self,
         name: str,
         resource_group_name: str,
-        tags: Optional[dict] = None,
+        tags: Optional[Dict[str, str]] = None,
         description: Optional[str] = None,
         features: Optional[List[str]] = None,
         **kwargs: dict,
     ) -> dict:
-        instance = kwargs.pop("instance", None) or self.show(name=name, resource_group_name=resource_group_name)
+        # TODO
+        #instance = kwargs.pop("instance", None) or self.show(name=name, resource_group_name=resource_group_name)
+        instance = {"properties": {}}
 
         if description:
             instance["properties"]["description"] = description
@@ -150,7 +152,8 @@ class Instances(Queryable):
 
         if tags or tags == {}:
             instance["tags"] = tags
-
+        # TODO
+        return instance
         with console.status("Working..."):
             poller = self.iotops_mgmt_client.instance.begin_create_or_update(
                 instance_name=name,
@@ -564,15 +567,14 @@ def parse_feature_kvp_nargs(features: Optional[List[str]] = None) -> Optional[Di
 
     features_payload = {}
     errors = []
-    mode_pattern = re.compile(r"^(a|b|c)\.mode$")
-    setting_pattern = re.compile(r"^(a|b|c)\.settings\.[^.\s]+$")
+    mode_pattern = re.compile(r"^\w+\.mode$")
+    setting_pattern = re.compile(r"^\w+\.settings\.[^.\s]+$")
 
     for key in features:
         if not (mode_pattern.match(key) or setting_pattern.match(key)):
             errors.append(
-                f"key {key} does not match pattern 'a.mode' or "
-                "'a.settings.{settingName}'."
-            )
+                f"{key} is invalid. Feature keys must be in the form "
+                f"'{{component}}.mode' or '{{component}}.settings.{{setting}}'")
             continue
 
         split_key = key.split(".")
@@ -583,8 +585,14 @@ def parse_feature_kvp_nargs(features: Optional[List[str]] = None) -> Optional[Di
         if nested_key == "settings":
             if "settings" not in features_payload[split_key[0]]:
                 features_payload[split_key[0]][nested_key] = {}
+            if features[key] not in ["Enabled", "Disabled"]:
+                errors.append(f"{key} has an invalid value. Known setting values are: 'Enabled' or 'Disabled'.")
+                continue
             features_payload[split_key[0]][nested_key][split_key[2]] = features[key]
         if nested_key == "mode":
+            if features[key] not in ["Stable", "Preview", "Disabled"]:
+                errors.append(f"{key} has an invalid value. Known mode values are: 'Stable', 'Preview' or 'Disabled'.")
+                continue
             features_payload[split_key[0]][nested_key] = features[key]
 
     if errors:

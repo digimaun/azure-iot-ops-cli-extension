@@ -81,8 +81,6 @@ def load_iotops_arguments(self, _):
             "tags",
             options_list=["--tags"],
             arg_type=tags_type,
-            help="Instance tags. Property bag in key-value pairs with the following format: a=b c=d. "
-            'Use --tags "" to remove all tags.',
         )
         context.argument(
             "instance_name",
@@ -513,9 +511,10 @@ def load_iotops_arguments(self, _):
                 options_list=["--feature"],
                 nargs="+",
                 action="extend",
-                help="Instance feature config. Format is space-separated key=value pairs. "
-                "Keys have two kinds of syntax. Either `{componentName}.mode` "
-                "or `{componentName}.settings.{settingName}`. This option can be used one or more times.",
+                help="Instance feature config. The settings of a component and/or it's mode can be configured. "
+                "Component mode syntax is `{component}.mode={mode}` where known mode values are: "
+                "`Stable`, `Preview` and `Disabled`. Component setting syntax is "
+                "`{component}.settings.{setting}={value}`. This option can be used one or more times."
             )
 
     with self.argument_context("iot ops upgrade") as context:
@@ -683,8 +682,6 @@ def load_iotops_arguments(self, _):
             "tags",
             options_list=["--tags"],
             arg_type=tags_type,
-            help="Schema registry tags. Property bag in key-value pairs with the following format: a=b c=d. "
-            'Use --tags "" to remove all tags.',
         )
         context.argument(
             "description",
