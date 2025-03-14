@@ -574,7 +574,7 @@ def parse_feature_kvp_nargs(features: Optional[List[str]] = None) -> Optional[Di
         if not (mode_pattern.match(key) or setting_pattern.match(key)):
             errors.append(
                 f"{key} is invalid. Feature keys must be in the form "
-                f"'{{component}}.mode' or '{{component}}.settings.{{setting}}'"
+                f"'{{component}}.mode' or '{{component}}.settings.{{setting}}'."
             )
             continue
 

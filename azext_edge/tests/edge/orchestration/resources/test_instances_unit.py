@@ -13,6 +13,10 @@ import responses
 
 from azext_edge.edge.commands_edge import list_instances, show_instance, update_instance
 from azext_edge.edge.providers.orchestration.resources import Instances
+from azext_edge.edge.providers.orchestration.resources.instances import (
+    parse_feature_kvp_nargs,
+)
+from azure.cli.core.azclierror import InvalidArgumentValueError
 
 from ....generators import generate_random_string
 from .conftest import (
@@ -258,3 +262,75 @@ def test_instance_update(
 
     assert update_request == updated_record
     assert result == updated_record
+
+
+@pytest.mark.parametrize(
+    "feature_scenario",
+    [
+        {"case": "No input handled."},
+        {
+            "case": "Single valid input handled.",
+            "inputs": ["mqttBroker.mode=Stable"],
+            "expected": {"mqttBroker": {"mode": "Stable"}},
+        },
+        {
+            "case": "Multiple valid input for single component handled.",
+            "inputs": ["mqttBroker.mode=Stable", "mqttBroker.settings.setting1=Enabled"],
+            "expected": {"mqttBroker": {"mode": "Stable", "settings": {"setting1": "Enabled"}}},
+        },
+        {
+            "case": "Multiple valid input for multiple components handled.",
+            "inputs": ["mqttBroker.settings.setting1=Enabled", "adr.settings.setting1=Enabled"],
+            "expected": {
+                "mqttBroker": {"settings": {"setting1": "Enabled"}},
+                "adr": {"settings": {"setting1": "Enabled"}},
+            },
+        },
+        {
+            "case": "Multiple valid input of distinct keys for multiple components handled.",
+            "inputs": [
+                "mqttBroker.mode=Preview",
+                "mqttBroker.settings.setting1=Enabled",
+                "adr.settings.setting1=Enabled",
+            ],
+            "expected": {
+                "mqttBroker": {"mode": "Preview", "settings": {"setting1": "Enabled"}},
+                "adr": {"settings": {"setting1": "Enabled"}},
+            },
+        },
+        {
+            "case": "Single invalid input.",
+            "inputs": ["mqttBroker.settings.setting1=True"],
+            "errors": [
+                "mqttBroker.settings.setting1 has an invalid value.",
+            ],
+        },
+        {
+            "case": "Multiple invalid input with distinct reasons.",
+            "inputs": ["mqttBroker.mode=True", "adr.settings.setting1=False", "adr.config.name=value"],
+            "errors": [
+                "mqttBroker.mode has an invalid value.",
+                "adr.settings.setting1 has an invalid value.",
+                "adr.config.name is invalid.",
+            ],
+        },
+        {
+            "case": "Mix of valid and invalid input to exercise only errors being raised.",
+            "inputs": ["mqttBroker.settings.setting1=True", "adr.settings.setting1=Enabled", "adr.config.name=value"],
+            "errors": ["mqttBroker.settings.setting1 has an invalid value.", "adr.config.name is invalid."],
+        },
+    ],
+)
+def test_parse_feature_kvp_nargs(feature_scenario: Optional[dict]):
+    errors = feature_scenario.get("errors", [])
+    if errors:
+        with pytest.raises(InvalidArgumentValueError) as exc:
+            parse_feature_kvp_nargs(features=feature_scenario.get("inputs"))
+        exc_str = str(exc.value)
+        for e in errors:
+            assert e in exc_str
+        assert len(errors) == len(exc_str.split("\n")), f"Test error count mismatch:\n{exc_str}"
+        return
+
+    result = parse_feature_kvp_nargs(features=feature_scenario.get("inputs"))
+    assert result == feature_scenario.get("expected", {}), f"Expectation failure for: {feature_scenario.get('case')}"
