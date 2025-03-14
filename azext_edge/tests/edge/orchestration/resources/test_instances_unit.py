@@ -46,11 +46,24 @@ def get_cl_endpoint(resource_group_name: Optional[str] = None, cl_name: Optional
     )
 
 
-def get_mock_instance_record(name: str, resource_group_name: str) -> dict:
+def get_mock_instance_record(
+    name: str,
+    resource_group_name: str,
+    description: Optional[str] = None,
+    tags: Optional[dict] = None,
+    features: Optional[dict] = None,
+) -> dict:
+    properties = {"provisioningState": "Succeeded"}
+    if description:
+        properties["description"] = description
+    if features:
+        properties["features"] = features
+
     return get_mock_resource(
         name=name,
-        properties={"description": "AIO Instance description.", "provisioningState": "Succeeded"},
+        properties=properties,
         resource_group_name=resource_group_name,
+        tags=tags,
     )
 
 
@@ -167,23 +180,57 @@ def test_instance_list(mocked_cmd, mocked_responses: responses, resource_group_n
     "tags",
     [None, {"a": "b", "c": "d"}, {}],
 )
-def test_instance_update(mocked_cmd, mocked_responses: responses, description: Optional[str], tags: Optional[dict]):
+@pytest.mark.parametrize(
+    "features",
+    [
+        {},
+        {"inputs": ["mqttBroker.mode=Stable"], "expected": {"mqttBroker": {"mode": "Stable"}}},
+        {
+            "inputs": ["mqttBroker.mode=Stable", "mqttBroker.settings.setting1=Enabled"],
+            "expected": {"mqttBroker": {"mode": "Stable", "settings": {"setting1": "Enabled"}}},
+        },
+        {
+            "inputs": ["mqttBroker.settings.setting1=Enabled", "adr.settings.setting1=Enabled"],
+            "expected": {
+                "mqttBroker": {"settings": {"setting1": "Enabled"}},
+                "adr": {"settings": {"setting1": "Enabled"}},
+            },
+        },
+    ],
+)
+def test_instance_update(
+    mocked_cmd,
+    mocked_responses: responses,
+    description: Optional[str],
+    tags: Optional[dict],
+    features: Optional[dict],
+):
     instance_name = generate_random_string()
     resource_group_name = generate_random_string()
     instance_endpoint = get_instance_endpoint(resource_group_name=resource_group_name, instance_name=instance_name)
 
-    mock_instance_record = get_mock_instance_record(name=instance_name, resource_group_name=resource_group_name)
+    initial_record = get_mock_instance_record(
+        name=instance_name,
+        resource_group_name=resource_group_name,
+    )
     mocked_responses.add(
         method=responses.GET,
         url=instance_endpoint,
-        json=mock_instance_record,
+        json=initial_record,
         status=200,
         content_type="application/json",
+    )
+    updated_record = get_mock_instance_record(
+        name=instance_name,
+        resource_group_name=resource_group_name,
+        description=description,
+        tags=tags,
+        features=features.get("expected"),
     )
     mocked_responses.add(
         method=responses.PUT,
         url=instance_endpoint,
-        json=mock_instance_record,
+        json=updated_record,
         status=200,
         content_type="application/json",
     )
@@ -193,10 +240,10 @@ def test_instance_update(mocked_cmd, mocked_responses: responses, description: O
         instance_name=instance_name,
         resource_group_name=resource_group_name,
         tags=tags,
+        instance_features=features.get("inputs"),
         instance_description=description,
         wait_sec=0,
     )
-    assert result == mock_instance_record
     assert len(mocked_responses.calls) == 2
 
     update_request = json.loads(mocked_responses.calls[1].request.body)
@@ -206,5 +253,8 @@ def test_instance_update(mocked_cmd, mocked_responses: responses, description: O
     if tags or tags == {}:
         assert update_request["tags"] == tags
 
-    if not any([description, tags or tags == {}]):
-        assert update_request == mock_instance_record
+    if features:
+        assert update_request["properties"]["features"] == features["expected"]
+
+    assert update_request == updated_record
+    assert result == updated_record

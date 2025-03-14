@@ -514,7 +514,8 @@ def load_iotops_arguments(self, _):
                 help="Instance feature config. The settings of a component and/or it's mode can be configured. "
                 "Component mode syntax is `{component}.mode={mode}` where known mode values are: "
                 "`Stable`, `Preview` and `Disabled`. Component setting syntax is "
-                "`{component}.settings.{setting}={value}`. This option can be used one or more times."
+                "`{component}.settings.{setting}={value}` where known setting values are `Enabled` or `Disabled`. "
+                "This option can be used one or more times."
             )
 
     with self.argument_context("iot ops upgrade") as context:

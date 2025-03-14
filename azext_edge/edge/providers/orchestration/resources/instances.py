@@ -137,9 +137,9 @@ class Instances(Queryable):
         features: Optional[List[str]] = None,
         **kwargs: dict,
     ) -> dict:
-        # TODO
-        #instance = kwargs.pop("instance", None) or self.show(name=name, resource_group_name=resource_group_name)
-        instance = {"properties": {}}
+        instance = kwargs.pop("instance", None) or self.show(name=name, resource_group_name=resource_group_name)
+        # # TODO
+        # instance = {"properties": {}}
 
         if description:
             instance["properties"]["description"] = description
@@ -152,8 +152,8 @@ class Instances(Queryable):
 
         if tags or tags == {}:
             instance["tags"] = tags
-        # TODO
-        return instance
+        # # TODO
+        # return instance
         with console.status("Working..."):
             poller = self.iotops_mgmt_client.instance.begin_create_or_update(
                 instance_name=name,
@@ -574,7 +574,8 @@ def parse_feature_kvp_nargs(features: Optional[List[str]] = None) -> Optional[Di
         if not (mode_pattern.match(key) or setting_pattern.match(key)):
             errors.append(
                 f"{key} is invalid. Feature keys must be in the form "
-                f"'{{component}}.mode' or '{{component}}.settings.{{setting}}'")
+                f"'{{component}}.mode' or '{{component}}.settings.{{setting}}'"
+            )
             continue
 
         split_key = key.split(".")
