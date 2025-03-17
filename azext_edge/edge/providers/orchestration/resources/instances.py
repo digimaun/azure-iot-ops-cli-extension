@@ -245,6 +245,8 @@ class Instances(Queryable):
         spc_name: Optional[str] = None,
         skip_role_assignments: bool = False,
         use_self_hosted_issuer: Optional[bool] = None,
+        custom_role_id: Optional[str] = None,
+        tags: Optional[dict] = None,
         **kwargs,
     ):
         # TODO: add unit test
@@ -264,7 +266,9 @@ class Instances(Queryable):
             role_assignment_error = None
             if not skip_role_assignments:
                 role_assignment_error = self._attempt_keyvault_role_assignments(
-                    keyvault_resource_id_container=keyvault_resource_id_container, mi_user_assigned=mi_user_assigned
+                    keyvault_resource_id_container=keyvault_resource_id_container,
+                    mi_user_assigned=mi_user_assigned,
+                    custom_role_id=custom_role_id,
                 )
 
             instance = self.show(name=name, resource_group_name=resource_group_name)
@@ -297,6 +301,18 @@ class Instances(Queryable):
                 subject=cred_subject,
                 federated_credential_name=federated_credential_name,
             )
+
+            spc_resource = {
+                "location": cluster_resource["location"],
+                "extendedLocation": instance["extendedLocation"],
+                "properties": {
+                    "clientId": mi_user_assigned["properties"]["clientId"],
+                    "keyvaultName": keyvault_resource_id_container.resource_name,
+                    "tenantId": get_tenant_id(),
+                },
+            }
+            if tags:
+                spc_resource["tags"] = tags
             spc_poller = self.ssc_mgmt_client.azure_key_vault_secret_provider_classes.begin_create_or_update(
                 resource_group_name=resource_group_name,
                 azure_key_vault_secret_provider_class_name=spc_name
@@ -305,15 +321,7 @@ class Instances(Queryable):
                     resource_group_name=resource_group_name,
                     instance_name=instance["name"],
                 ),
-                resource={
-                    "location": cluster_resource["location"],
-                    "extendedLocation": instance["extendedLocation"],
-                    "properties": {
-                        "clientId": mi_user_assigned["properties"]["clientId"],
-                        "keyvaultName": keyvault_resource_id_container.resource_name,
-                        "tenantId": get_tenant_id(),
-                    },
-                },
+                resource=spc_resource,
             )
             result_spc = wait_for_terminal_state(spc_poller, **kwargs)
             status.stop()
@@ -431,12 +439,20 @@ class Instances(Queryable):
         return related_secretsyncs
 
     def _attempt_keyvault_role_assignments(
-        self, keyvault_resource_id_container: ResourceIdContainer, mi_user_assigned: dict
+        self,
+        keyvault_resource_id_container: ResourceIdContainer,
+        mi_user_assigned: dict,
+        custom_role_id: Optional[str] = None,
     ) -> Optional[str]:
         """
         Returns error string if the role-assignment fails.
         """
-        target_role_ids = [KEYVAULT_ROLE_ID_SECRETS_USER, KEYVAULT_ROLE_ID_READER]
+        target_role_ids = []
+        if custom_role_id:
+            target_role_ids.append(custom_role_id)
+        if not target_role_ids:
+            target_role_ids = [KEYVAULT_ROLE_ID_SECRETS_USER, KEYVAULT_ROLE_ID_READER]
+
         try:
             for role_id in target_role_ids:
                 self.permission_manager.apply_role_assignment(
