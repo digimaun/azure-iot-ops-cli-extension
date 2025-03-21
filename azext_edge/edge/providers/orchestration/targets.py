@@ -112,6 +112,7 @@ class InitTargets:
         self.deploy_resource_sync_rules = bool(enable_rsync_rules)
         self.instance_name = self._sanitize_k8s_name(instance_name)
         self.instance_description = instance_description
+        self.instance_features_og = instance_features
         self.instance_features = parse_feature_kvp_nargs(instance_features)
         self.tags = tags
         self.enable_fault_tolerance = enable_fault_tolerance
@@ -276,10 +277,9 @@ class InitTargets:
         dataflow_profile = template.get_resource_by_key("dataflow_profile")
         dataflow_endpoint = template.get_resource_by_key("dataflow_endpoint")
 
-        instance["properties"]["description"] = self.instance_description
-
-        if self.instance_features:
-            instance["properties"]["features"] = self.instance_features
+        instance["properties"] = get_default_instance_config(
+            description=self.instance_description, features=self.instance_features
+        )
 
         if self.instance_name:
             instance["name"] = self.instance_name
@@ -435,4 +435,12 @@ def get_default_ssc_config() -> Dict[str, str]:
     return {
         "rotationPollIntervalInSeconds": "120",
         "validatingAdmissionPolicies.applyPolicies": "false",
+    }
+
+
+def get_default_instance_config(description: Optional[str] = None, features: Optional[dict] = None) -> dict:
+    return {
+        "description": description,
+        "schemaRegistryRef": {"resourceId": "[parameters('schemaRegistryId')]"},
+        "features": features,
     }

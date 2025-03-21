@@ -148,10 +148,20 @@ class WorkManager:
         return display_desc[:-1]
 
     def _format_instance_config_desc(self) -> str:
-        instance_config = {"resource sync": "enabled" if self._targets.deploy_resource_sync_rules else "disabled"}
+        instance_config = {
+            "resource sync": "enabled" if self._targets.deploy_resource_sync_rules else "disabled",
+        }
+        feature_str = "n/a"
+        if self._targets.instance_features_og:
+            feature_str = ""
+            for f in self._targets.instance_features_og:
+                feature_str += f"  [magenta]+[/magenta] {f}\n"
+            feature_str = f"\n{feature_str[:-1]}"
+        instance_config["feature config"] = feature_str
+
         display_desc = ""
         for c in instance_config:
-            display_desc += f"• {c}: {instance_config[c]}\n"
+            display_desc += f"[bright_yellow]•[/bright_yellow] {c}: {instance_config[c]}\n"
         return display_desc[:-1]
 
     def _build_display(self):
