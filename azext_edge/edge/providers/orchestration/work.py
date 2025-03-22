@@ -155,9 +155,9 @@ class WorkManager:
         if self._targets.instance_features_og:
             feature_str = ""
             for f in self._targets.instance_features_og:
-                feature_str += f"  [magenta]+[/magenta] {f}\n"
+                feature_str += f"  .{f}\n"
             feature_str = f"\n{feature_str[:-1]}"
-        instance_config["feature config"] = feature_str
+        instance_config["features"] = feature_str
 
         display_desc = ""
         for c in instance_config:

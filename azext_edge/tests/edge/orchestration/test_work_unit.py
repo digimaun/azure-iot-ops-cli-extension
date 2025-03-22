@@ -882,8 +882,8 @@ def assert_instance_deployment_body(body_str: str, target_scenario: dict, phase:
         if instance_features:
             assert resources["aioInstance"]["properties"]["features"]
         else:
-            # TODO: think about general 'not in' pattern
-            assert "features" not in resources["aioInstance"]["properties"]
+            # TODO: think about general 'not in' or 'not' pattern
+            assert not resources["aioInstance"]["properties"]["features"]
 
     if phase in [InstancePhase.RESOURCES]:
         assert resources["broker"]["name"] == f"{instance_name_lowered}/{DEFAULT_BROKER}"
