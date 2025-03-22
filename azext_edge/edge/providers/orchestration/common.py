@@ -65,12 +65,6 @@ EXTENSION_ALIAS_TO_TYPE_MAP = {
 }
 
 
-FEATURE_SERVICE_KEY = {
-    "mqttBroker": None,
-    "dataFlows": None,
-    "akri": None,
-}
-
 class ClusterConnectStatus(Enum):
     CONNECTED = "Connected"
 
