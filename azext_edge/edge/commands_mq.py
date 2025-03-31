@@ -4,7 +4,7 @@
 # Licensed under the MIT License. See License file in the project root for license information.
 # ----------------------------------------------------------------------------------------------
 
-from typing import Iterable, Optional
+from typing import Iterable, Optional, List
 
 from knack.log import get_logger
 
@@ -49,6 +49,55 @@ def create_broker_listener(
         instance_name=instance_name,
         resource_group_name=resource_group_name,
         config_file=config_file,
+        **kwargs,
+    )
+
+
+def add_broker_listener_port(
+    cmd,
+    listener_name: str,
+    instance_name: str,
+    resource_group_name: str,
+    port: int,
+    broker_name: str = DEFAULT_BROKER,
+    service_name: Optional[str] = None,
+    service_type: Optional[str] = None,
+    authn: Optional[str] = None,
+    authz: Optional[str] = None,
+    protocol: Optional[str] = None,
+    tls_auto_issuer_name: Optional[str] = None,
+    tls_auto_issuer_kind: Optional[str] = None,
+    tls_auto_issuer_group: Optional[str] = None,
+    tls_auto_duration: Optional[str] = None,
+    tls_auto_private_key_algorithm: Optional[str] = None,
+    tls_auto_private_key_rotation_policy: Optional[str] = None,
+    tls_auto_san_dns: Optional[List[str]] = None,
+    tls_auto_san_ip: Optional[List[str]] = None,
+    tls_auto_secret_name: Optional[str] = None,
+    tls_manual_secret_ref: Optional[str] = None,
+    **kwargs,
+) -> dict:
+    return Brokers(cmd).listeners.add_port(
+        listener_name=listener_name,
+        broker_name=broker_name,
+        instance_name=instance_name,
+        resource_group_name=resource_group_name,
+        port=port,
+        service_name=service_name,
+        service_type=service_type,
+        authn=authn,
+        authz=authz,
+        protocol=protocol,
+        tls_auto_issuer_name=tls_auto_issuer_name,
+        tls_auto_issuer_kind=tls_auto_issuer_kind,
+        tls_auto_issuer_group=tls_auto_issuer_group,
+        tls_auto_duration=tls_auto_duration,
+        tls_auto_private_key_algorithm=tls_auto_private_key_algorithm,
+        tls_auto_private_key_rotation_policy=tls_auto_private_key_rotation_policy,
+        tls_auto_san_dns=tls_auto_san_dns,
+        tls_auto_san_ip=tls_auto_san_ip,
+        tls_auto_secret_name=tls_auto_secret_name,
+        tls_manual_secret_ref=tls_manual_secret_ref,
         **kwargs,
     )
 

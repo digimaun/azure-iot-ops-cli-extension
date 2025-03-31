@@ -297,6 +297,14 @@ def load_iotops_arguments(self, _):
             help="Broker name.",
         )
 
+    with self.argument_context("iot ops broker listener port") as context:
+        context.argument(
+            "listener_name",
+            options_list=["--listener", "-l"],
+            help="Listener name.",
+        )
+
+
     with self.argument_context("iot ops broker authn") as context:
         context.argument(
             "authn_name",

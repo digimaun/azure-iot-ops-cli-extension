@@ -4,7 +4,7 @@
 # Licensed under the MIT License. See License file in the project root for license information.
 # ----------------------------------------------------------------------------------------------
 
-from typing import TYPE_CHECKING, Iterable, Optional
+from typing import TYPE_CHECKING, Iterable, Optional, List
 
 from knack.log import get_logger
 from rich.console import Console
@@ -67,10 +67,46 @@ class BrokerListeners:
         self.ops = ops
         self.get_ext_loc = get_ext_loc
 
-    def create(
-        self, name: str, broker_name: str, instance_name: str, resource_group_name: str, config_file: str, **kwargs
+    @classmethod
+    def build_config(
+        safe_params: List[str],
+        service_name: Optional[str] = None,
+        service_type: str = "LoadBalancer",
+        ports: Optional[List[int]] = None,
+        authn: Optional[List[str]] = None,
+        authz: Optional[List[str]] = None,
+        protocol: Optional[List[str]] = None,
+        tls_auto_issuer_name: Optional[List[str]] = None,
+        tls_auto_issuer_kind: Optional[List[str]] = None,
+        tls_auto_issuer_group: Optional[List[str]] = None,
+        tls_manual_x509_secret: Optional[List[str]] = None,
+        san_ip: Optional[List[str]] = None,
+        san_dns: Optional[List[str]] = None,
     ) -> dict:
-        listener_config = get_file_config(config_file)
+        config = {}
+        config["ports"] = []
+        for port in ports:
+            port_config = {"port": port}
+            config["ports"].append(port_config)
+
+        return config
+
+    def create(
+        self,
+        name: str,
+        broker_name: str,
+        instance_name: str,
+        resource_group_name: str,
+        config_file: Optional[str] = None,
+        config: Optional[dict] = None,
+        **kwargs
+    ) -> dict:
+        if not any([config, config_file]):
+            logger.warning("Please provide listener config via parameters or --config-file.")
+            return
+
+        listener_config = config or get_file_config(config_file)
+
         resource = {}
         resource["extendedLocation"] = self.get_ext_loc(name=instance_name, resource_group_name=resource_group_name)
         resource["properties"] = listener_config
@@ -84,6 +120,35 @@ class BrokerListeners:
                 resource=resource,
             )
             return wait_for_terminal_state(poller, **kwargs)
+
+    def add_port(
+        self,
+        listener_name: str,
+        broker_name: str,
+        instance_name: str,
+        resource_group_name: str,
+        port: int,
+        service_name: Optional[str] = None,
+        service_type: Optional[str] = None,
+        authn: Optional[str] = None,
+        authz: Optional[str] = None,
+        protocol: Optional[str] = None,
+        tls_auto_issuer_name: Optional[str] = None,
+        tls_auto_issuer_kind: Optional[str] = None,
+        tls_auto_issuer_group: Optional[str] = None,
+        tls_auto_duration: Optional[str] = None,
+        tls_auto_private_key_algorithm: Optional[str] = None,
+        tls_auto_private_key_rotation_policy: Optional[str] = None,
+        tls_auto_san_dns: Optional[List[str]] = None,
+        tls_auto_san_ip: Optional[List[str]] = None,
+        tls_auto_secret_name: Optional[str] = None,
+        tls_manual_secret_ref: Optional[str] = None,
+    ) -> dict:
+        listener = self.show(name=listener_name, broker_name=broker_name, instance_name=instance_name, resource_group_name=resource_group_name)
+        #li
+        import pdb; pdb.set_trace()
+        pass
+
 
     def show(self, name: str, broker_name: str, instance_name: str, resource_group_name: str) -> dict:
         return self.ops.get(
