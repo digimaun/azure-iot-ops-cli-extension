@@ -4,8 +4,10 @@
 # Licensed under the MIT License. See License file in the project root for license information.
 # ----------------------------------------------------------------------------------------------
 
-from typing import TYPE_CHECKING, Iterable, Optional, List
+from typing import TYPE_CHECKING, Iterable, List, Optional
 
+from azure.cli.core.azclierror import ValidationError
+from azure.core.exceptions import ResourceNotFoundError
 from knack.log import get_logger
 from rich.console import Console
 
@@ -99,7 +101,7 @@ class BrokerListeners:
         resource_group_name: str,
         config_file: Optional[str] = None,
         config: Optional[dict] = None,
-        **kwargs
+        **kwargs,
     ) -> dict:
         if not any([config, config_file]):
             logger.warning("Please provide listener config via parameters or --config-file.")
@@ -123,13 +125,13 @@ class BrokerListeners:
 
     def add_port(
         self,
+        port: int,
         listener_name: str,
         broker_name: str,
         instance_name: str,
         resource_group_name: str,
-        port: int,
         service_name: Optional[str] = None,
-        service_type: Optional[str] = None,
+        service_type: Optional[str] = "LoadBalancer",
         authn: Optional[str] = None,
         authz: Optional[str] = None,
         protocol: Optional[str] = None,
@@ -143,12 +145,107 @@ class BrokerListeners:
         tls_auto_san_ip: Optional[List[str]] = None,
         tls_auto_secret_name: Optional[str] = None,
         tls_manual_secret_ref: Optional[str] = None,
+        **kwargs,
     ) -> dict:
-        listener = self.show(name=listener_name, broker_name=broker_name, instance_name=instance_name, resource_group_name=resource_group_name)
-        #li
-        import pdb; pdb.set_trace()
-        pass
+        listener = {}
+        try:
+            listener = self.show(
+                name=listener_name,
+                broker_name=broker_name,
+                instance_name=instance_name,
+                resource_group_name=resource_group_name,
+            )
+        except ResourceNotFoundError:
+            if not service_name:
+                service_name = listener_name
 
+        if not listener:
+            listener["name"] = listener_name
+            listener["extendedLocation"] = self.get_ext_loc(
+                name=instance_name, resource_group_name=resource_group_name
+            )
+            # TODO: Default serviceType ?
+            listener["properties"] = {"serviceName": service_name, "serviceType": service_type}
+
+        port_configs: List[dict] = listener["properties"].get("ports", [])
+        port_config = next(
+            (port_config for port_config in port_configs if port_config["port"] == port), {"port": port}
+        )
+
+        if authn:
+            port_config["authenticationRef"] = authn
+        if authz:
+            port_config["authorizationRef"] = authz
+        if protocol:
+            port_config["protocol"] = protocol
+
+        if not any(port_config["port"] == port for port_config in port_configs):
+            port_configs.append(port_config)
+            listener["properties"]["ports"] = port_configs
+        import pdb
+
+        pdb.set_trace()
+
+        with console.status("Working..."):
+            poller = self.ops.begin_create_or_update(
+                resource_group_name=resource_group_name,
+                instance_name=instance_name,
+                broker_name=broker_name,
+                listener_name=listener_name,
+                resource=listener,
+            )
+            return wait_for_terminal_state(poller, **kwargs)
+
+    def remove_port(
+        self,
+        port: int,
+        listener_name: str,
+        broker_name: str,
+        instance_name: str,
+        resource_group_name: str,
+        confirm_yes: Optional[bool] = None,
+        **kwargs,
+    ):
+        listener = self.show(
+            name=listener_name,
+            broker_name=broker_name,
+            instance_name=instance_name,
+            resource_group_name=resource_group_name,
+        )
+        port_configs = listener["properties"].get("ports", [])
+        orig_configs_len = len(port_configs)
+        port_configs = [port_config for port_config in port_configs if port_config["port"] != port]
+        mod_configs_len = len(port_configs)
+        listener["properties"]["ports"] = port_configs
+
+        if orig_configs_len == mod_configs_len:
+            logger.warning("No port modification detected.")
+            return
+
+        if not len(port_configs):
+            logger.warning("Listener resource will be deleted as it will no longer have any ports configured.")
+            self.delete(
+                name=listener_name,
+                broker_name=broker_name,
+                instance_name=instance_name,
+                resource_group_name=resource_group_name,
+                confirm_yes=confirm_yes,
+            )
+            return
+
+        should_bail = not should_continue_prompt(confirm_yes=confirm_yes)
+        if should_bail:
+            return
+
+        with console.status("Working..."):
+            poller = self.ops.begin_create_or_update(
+                resource_group_name=resource_group_name,
+                instance_name=instance_name,
+                broker_name=broker_name,
+                listener_name=listener_name,
+                resource=listener,
+            )
+            return wait_for_terminal_state(poller, **kwargs)
 
     def show(self, name: str, broker_name: str, instance_name: str, resource_group_name: str) -> dict:
         return self.ops.get(
@@ -170,7 +267,7 @@ class BrokerListeners:
         instance_name: str,
         resource_group_name: str,
         confirm_yes: Optional[bool] = None,
-        **kwargs
+        **kwargs,
     ):
         should_bail = not should_continue_prompt(confirm_yes=confirm_yes)
         if should_bail:
@@ -229,7 +326,7 @@ class BrokerAuthn:
         instance_name: str,
         resource_group_name: str,
         confirm_yes: Optional[bool] = None,
-        **kwargs
+        **kwargs,
     ):
         should_bail = not should_continue_prompt(confirm_yes=confirm_yes)
         if should_bail:
@@ -288,7 +385,7 @@ class BrokerAuthz:
         instance_name: str,
         resource_group_name: str,
         confirm_yes: Optional[bool] = None,
-        **kwargs
+        **kwargs,
     ):
         should_bail = not should_continue_prompt(confirm_yes=confirm_yes)
         if should_bail:
