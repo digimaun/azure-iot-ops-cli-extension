@@ -135,12 +135,11 @@ class BrokerListeners:
         authn: Optional[str] = None,
         authz: Optional[str] = None,
         protocol: Optional[str] = None,
-        tls_auto_issuer_name: Optional[str] = None,
-        tls_auto_issuer_kind: Optional[str] = None,
-        tls_auto_issuer_group: Optional[str] = None,
+        nodeport: Optional[int] = None,
+        tls_auto_issuer: Optional[str] = None,
         tls_auto_duration: Optional[str] = None,
-        tls_auto_private_key_algorithm: Optional[str] = None,
-        tls_auto_private_key_rotation_policy: Optional[str] = None,
+        tls_auto_key_algo: Optional[str] = None,
+        tls_auto_key_rotation_policy: Optional[str] = None,
         tls_auto_san_dns: Optional[List[str]] = None,
         tls_auto_san_ip: Optional[List[str]] = None,
         tls_auto_secret_name: Optional[str] = None,
@@ -164,7 +163,6 @@ class BrokerListeners:
             listener["extendedLocation"] = self.get_ext_loc(
                 name=instance_name, resource_group_name=resource_group_name
             )
-            # TODO: Default serviceType ?
             listener["properties"] = {"serviceName": service_name, "serviceType": service_type}
 
         port_configs: List[dict] = listener["properties"].get("ports", [])
@@ -178,6 +176,8 @@ class BrokerListeners:
             port_config["authorizationRef"] = authz
         if protocol:
             port_config["protocol"] = protocol
+        if nodeport:
+            port_config["nodePort"] = nodeport
 
         if not any(port_config["port"] == port for port_config in port_configs):
             port_configs.append(port_config)
