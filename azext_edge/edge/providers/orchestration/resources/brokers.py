@@ -140,6 +140,7 @@ class BrokerListeners:
         tls_auto_duration: Optional[str] = None,
         tls_auto_key_algo: Optional[str] = None,
         tls_auto_key_rotation_policy: Optional[str] = None,
+        tls_auto_renew_before: Optional[str] = None,
         tls_auto_san_dns: Optional[List[str]] = None,
         tls_auto_san_ip: Optional[List[str]] = None,
         tls_auto_secret_name: Optional[str] = None,
@@ -178,6 +179,24 @@ class BrokerListeners:
             port_config["protocol"] = protocol
         if nodeport:
             port_config["nodePort"] = nodeport
+        if tls_auto_issuer:
+            pass
+        if tls_auto_duration:
+            pass
+        if tls_auto_key_algo:
+            pass
+        if tls_auto_key_rotation_policy:
+            pass
+        if tls_auto_renew_before:
+            pass
+        if tls_auto_san_dns:
+            pass
+        if tls_auto_san_ip:
+            pass
+        if tls_auto_secret_name:
+            pass
+        if tls_manual_secret_ref:
+            pass
 
         if not any(port_config["port"] == port for port_config in port_configs):
             port_configs.append(port_config)

@@ -347,9 +347,10 @@ def load_iotops_arguments(self, _):
         context.argument(
             "tls_auto_issuer",
             options_list=["--x509-issuer"],
+            nargs="+",
             help="Cert-manager issuer reference. Format is space-separated "
             f"key=value pairs. The following keys are supported: `{'`, `'.join(list(X509_ISSUER_REF_MAP.keys()))}`. "
-            "`kind` and `name` are required, while group has a default value of 'cert-manager.io'.",
+            "`kind` and `name` are required, while `group` has a default value of 'cert-manager.io'.",
             arg_group="TLS Auto",
         )
         context.argument(
