@@ -16,6 +16,8 @@ from azext_edge.edge.commands_mq import (
     delete_broker_listener,
     list_broker_listeners,
     show_broker_listener,
+    add_broker_listener_port,
+    remove_broker_listener_port,
 )
 
 from ....generators import generate_random_string
@@ -34,30 +36,34 @@ def get_broker_listener_endpoint(
 
 
 def get_mock_broker_listener_record(
-    listener_name: str, broker_name: str, instance_name: str, resource_group_name: str
+    listener_name: str,
+    broker_name: str,
+    instance_name: str,
+    resource_group_name: str,
+    properties: Optional[dict] = None,
 ) -> dict:
+    default_properties = {
+        "ports": [
+            {
+                "authenticationRef": "authn",
+                "port": 8883,
+                "protocol": "Mqtt",
+                "tls": {
+                    "automatic": {
+                        "issuerRef": {"apiGroup": "cert-manager.io", "kind": "Issuer", "name": "mq-dmqtt-frontend"}
+                    },
+                    "mode": "Automatic",
+                },
+            }
+        ],
+        "provisioningState": "Succeeded",
+        "serviceName": "aio-broker-dmqtt-frontend",
+        "serviceType": "ClusterIp",
+    }
     return get_mock_resource(
         name=listener_name,
         resource_path=f"/instances/{instance_name}/brokers/{broker_name}/listeners/{listener_name}",
-        properties={
-            "brokerRef": broker_name,
-            "ports": [
-                {
-                    "authenticationRef": "authn",
-                    "port": 8883,
-                    "protocol": "Mqtt",
-                    "tls": {
-                        "automatic": {
-                            "issuerRef": {"apiGroup": "cert-manager.io", "kind": "Issuer", "name": "mq-dmqtt-frontend"}
-                        },
-                        "mode": "Automatic",
-                    },
-                }
-            ],
-            "provisioningState": "Succeeded",
-            "serviceName": "aio-broker-dmqtt-frontend",
-            "serviceType": "ClusterIp",
-        },
+        properties=properties or default_properties,
         resource_group_name=resource_group_name,
     )
 
@@ -176,7 +182,10 @@ def test_broker_listener_delete(mocked_cmd, mocked_responses: responses):
     "scenario",
     [
         {"file_payload": {generate_random_string(): generate_random_string()}},
-        {"file_payload": {generate_random_string(): generate_random_string()}, "broker_name": generate_random_string()},
+        {
+            "file_payload": {generate_random_string(): generate_random_string()},
+            "broker_name": generate_random_string(),
+        },
     ],
 )
 def test_broker_listener_create(mocked_cmd, mocked_responses: responses, mocked_get_file_config: Mock, scenario: dict):
@@ -230,3 +239,164 @@ def test_broker_listener_create(mocked_cmd, mocked_responses: responses, mocked_
     assert create_result == expected_payload
     request_payload = json.loads(put_response.calls[0].request.body)
     assert request_payload["extendedLocation"] == mock_instance_record["extendedLocation"]
+
+    # port: int
+    # broker_name: str = DEFAULT_BROKER,
+    # service_name: str | None = None,
+    # service_type: str | None = MqServiceType.LOADBALANCER.value,
+    # authn_ref: str | None = None,
+    # authz_ref: str | None = None,
+    # protocol: str | None = None,
+    # nodeport: int | None = None,
+    # tls_auto_issuer_ref: str | None = None,
+    # tls_auto_duration: str | None = None,
+    # tls_auto_key_algo: str | None = None,
+    # tls_auto_key_rotation_policy: str | None = None,
+    # tls_auto_renew_before: str | None = None,
+    # tls_auto_san_dns: List[str] | None = None,
+    # tls_auto_san_ip: List[str] | None = None,
+    # tls_auto_secret_name: str | None = None,
+    # tls_manual_secret_ref: str | None = None,
+    # show_config: bool | None = None,
+
+
+@pytest.mark.parametrize(
+    "scenario",
+    [
+        {
+            "input": {"port": 1883},
+            "existing_listener": {},
+            "expected_payload": {
+                "ports": [{"port": 1883}],
+                "serviceType": "LoadBalancer",
+            },
+        },
+        {
+            "input": {"port": 1883},
+            "existing_listener": {
+                "ports": [
+                    {
+                        "port": 18883,
+                        "protocol": "Mqtt",
+                        "tls": {
+                            "certManagerCertificateSpec": {
+                                "issuerRef": {
+                                    "group": "cert-manager.io",
+                                    "kind": "ClusterIssuer",
+                                    "name": "azure-iot-operations-aio-certificate-issuer",
+                                },
+                                "privateKey": {"algorithm": "Ec256", "rotationPolicy": "Always"},
+                            },
+                            "mode": "Automatic",
+                        },
+                    }
+                ],
+                "provisioningState": "Succeeded",
+                "serviceName": "aio-broker",
+                "serviceType": "ClusterIp",
+            },
+            "expected_payload": {
+                "ports": [
+                    {
+                        "port": 18883,
+                        "protocol": "Mqtt",
+                        "tls": {
+                            "certManagerCertificateSpec": {
+                                "issuerRef": {
+                                    "group": "cert-manager.io",
+                                    "kind": "ClusterIssuer",
+                                    "name": "azure-iot-operations-aio-certificate-issuer",
+                                },
+                                "privateKey": {"algorithm": "Ec256", "rotationPolicy": "Always"},
+                            },
+                            "mode": "Automatic",
+                        },
+                    },
+                    {
+                        "port": 1883,
+                    },
+                ],
+                "provisioningState": "Succeeded",
+                "serviceName": "aio-broker",
+                "serviceType": "ClusterIp",
+            },
+        },
+    ],
+)
+def test_broker_listener_port_add(mocked_cmd, mocked_responses: responses, scenario: dict):
+    instance_name = generate_random_string()
+    resource_group_name = generate_random_string()
+    listener_name = generate_random_string()
+
+    broker_name = scenario.get("input", {}).get("broker_name")
+    expected_payload = scenario.get("expected_payload")
+    existing_listener = scenario.get("existing_listener")
+
+    expected_listener_request = {}
+
+    get_listener_kwargs = {}
+    if not existing_listener:
+        mock_instance_record = get_mock_instance_record(name=instance_name, resource_group_name=resource_group_name)
+        mocked_responses.add(
+            method=responses.GET,
+            url=get_instance_endpoint(
+                resource_group_name=resource_group_name,
+                instance_name=instance_name,
+            ),
+            json=mock_instance_record,
+            status=200,
+        )
+        expected_listener_request = {
+            "extendedLocation": mock_instance_record["extendedLocation"],
+            "name": listener_name,
+            "properties": {"ports": expected_payload["ports"], "serviceType": expected_payload["serviceType"]},
+        }
+        get_listener_kwargs["status"] = 404
+    else:
+        mock_listener_record = get_mock_broker_listener_record(
+            resource_group_name=resource_group_name,
+            instance_name=instance_name,
+            broker_name=broker_name or DEFAULT_BROKER,
+            listener_name=listener_name,
+            properties=existing_listener,
+        )
+        expected_listener_request = dict(mock_listener_record)
+        expected_listener_request["properties"] = expected_payload
+        get_listener_kwargs["status"] = 200
+        get_listener_kwargs["json"] = mock_listener_record
+
+    mocked_responses.add(
+        method=responses.GET,
+        url=get_broker_listener_endpoint(
+            resource_group_name=resource_group_name,
+            instance_name=instance_name,
+            broker_name=broker_name or DEFAULT_BROKER,
+            listener_name=listener_name,
+        ),
+        **get_listener_kwargs,
+    )
+
+    put_response = mocked_responses.add(
+        method=responses.PUT,
+        url=get_broker_listener_endpoint(
+            resource_group_name=resource_group_name,
+            instance_name=instance_name,
+            broker_name=broker_name or DEFAULT_BROKER,
+            listener_name=listener_name,
+        ),
+        json=expected_listener_request,
+        status=200,
+    )
+    create_result = add_broker_listener_port(
+        cmd=mocked_cmd,
+        listener_name=listener_name,
+        instance_name=instance_name,
+        resource_group_name=resource_group_name,
+        wait_sec=0.1,
+        **scenario["input"],
+    )
+    assert create_result == expected_listener_request
+    request_payload = json.loads(put_response.calls[0].request.body)
+    assert request_payload == expected_listener_request
+
+    # assert request_payload["extendedLocation"] == mock_instance_record["extendedLocation"]

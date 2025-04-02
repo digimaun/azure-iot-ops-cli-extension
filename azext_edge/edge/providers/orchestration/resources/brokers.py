@@ -182,15 +182,14 @@ class BrokerListeners:
                 resource_group_name=resource_group_name,
             )
         except ResourceNotFoundError:
-            if not service_name:
-                service_name = listener_name
+            pass
 
         if not listener:
             listener["name"] = listener_name
             listener["extendedLocation"] = self.get_ext_loc(
                 name=instance_name, resource_group_name=resource_group_name
             )
-            listener["properties"] = {"serviceName": service_name, "serviceType": str(service_type)}
+            listener["properties"] = {"serviceType": str(service_type)}
 
         port_configs: List[dict] = listener["properties"].get("ports", [])
         port_config = next(
@@ -224,11 +223,8 @@ class BrokerListeners:
             listener["properties"]["ports"] = port_configs
 
         if show_config:
-            return port_config
+            return listener["properties"]
 
-        import pdb
-
-        pdb.set_trace()
         with console.status("Working..."):
             poller = self.ops.begin_create_or_update(
                 resource_group_name=resource_group_name,
