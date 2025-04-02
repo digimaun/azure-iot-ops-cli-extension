@@ -234,9 +234,16 @@ def load_iotops_help():
         long-summary: This is an add or replace (port) operation. If the target listener resource does not exist, the command will create it.
 
         examples:
-        - name: Add a config accepting tcp connections on port 1883 with no authz or authn for a listener service of type load balancer.
+        - name: Add a port config to the default cluster Ip listener, using port 8883 and an authn resource.
           text: >
-            az iot ops broker listener port add --port 1883 --listener listener --in myinstance -g mygroup
+            az iot ops broker listener port add --port 8883 --authn authn --listener default --in myinstance -g mygroup
+        - name: Create a new listener with service type load balancer using a port config accepting tcp connections on port 1883 with no authz or authn.
+          text: >
+            az iot ops broker listener port add --port 1883 --listener newlistener --in myinstance -g mygroup
+        - name: Add a port config to an existing listener using basic auto tls settings on port 8883 with authn.
+          text: >
+            az iot ops broker listener port add --port 8883 --authn authn --tls-issuer-ref issuer=azure-iot-operations-aio-certificate-issuer kind=ClusterIssuer
+            --listener newlistener --in myinstance -g mygroup
     """
 
     helps[

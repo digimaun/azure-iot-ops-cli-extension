@@ -96,7 +96,7 @@ class BrokerListeners:
 
     def _build_tls_config(
         self,
-        tls_auto_issuer: Optional[str] = None,
+        tls_auto_issuer_ref: Optional[str] = None,
         tls_auto_duration: Optional[str] = None,
         tls_auto_key_algo: Optional[str] = None,
         tls_auto_key_rotation_policy: Optional[str] = None,
@@ -110,13 +110,15 @@ class BrokerListeners:
         cm_config = defaultdict(dict)
         man_config = defaultdict(dict)
 
-        if tls_auto_issuer:
-            tls_auto_issuer = parse_kvp_nargs(tls_auto_issuer)
+        if tls_auto_issuer_ref:
+            tls_auto_issuer_ref = parse_kvp_nargs(tls_auto_issuer_ref)
             issuer_config = {}
             for key in ["group", "kind", "name"]:
-                if key in tls_auto_issuer:
-                    issuer_config[key] = tls_auto_issuer[key]
-            cm_config["issuerRef"] = tls_auto_issuer
+                if key in tls_auto_issuer_ref:
+                    issuer_config[key] = tls_auto_issuer_ref[key]
+            if "group" not in issuer_config:
+                issuer_config["group"] = "cert-manager.io"
+            cm_config["issuerRef"] = issuer_config
         if tls_auto_duration:
             cm_config["duration"] = tls_auto_duration
         if tls_auto_key_algo:
@@ -159,7 +161,7 @@ class BrokerListeners:
         authz: Optional[str] = None,
         protocol: Optional[str] = None,
         nodeport: Optional[int] = None,
-        tls_auto_issuer: Optional[str] = None,
+        tls_auto_issuer_ref: Optional[str] = None,
         tls_auto_duration: Optional[str] = None,
         tls_auto_key_algo: Optional[str] = None,
         tls_auto_key_rotation_policy: Optional[str] = None,
@@ -205,7 +207,7 @@ class BrokerListeners:
             port_config["nodePort"] = nodeport
 
         tls_config = self._build_tls_config(
-            tls_auto_issuer=tls_auto_issuer,
+            tls_auto_issuer_ref=tls_auto_issuer_ref,
             tls_auto_duration=tls_auto_duration,
             tls_auto_key_algo=tls_auto_key_algo,
             tls_auto_key_rotation_policy=tls_auto_key_rotation_policy,

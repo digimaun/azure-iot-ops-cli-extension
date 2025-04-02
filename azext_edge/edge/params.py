@@ -351,8 +351,8 @@ def load_iotops_arguments(self, _):
             "authz_ref", options_list=["--authz-ref"], help="Authorization reference (name).", arg_group="Auth"
         )
         context.argument(
-            "tls_auto_issuer",
-            options_list=["--x509-issuer"],
+            "tls_auto_issuer_ref",
+            options_list=["--tls-issuer-ref"],
             nargs="+",
             help="Cert-manager issuer reference. Format is space-separated "
             f"key=value pairs. The following keys are supported: `{'`, `'.join(X509_ISSUER_REF_KEYS)}`. "
@@ -361,56 +361,56 @@ def load_iotops_arguments(self, _):
         )
         context.argument(
             "tls_auto_duration",
-            options_list=["--x509-duration"],
+            options_list=["--tls-duration"],
             help="Lifetime of certificate. Must be specified using a time.Duration format (h|m|s). "
             "E.g. 240h for 240 hours and 45m for 45 minutes.",
             arg_group="TLS Auto",
         )
         context.argument(
             "tls_auto_key_algo",
-            options_list=["--x509-key-algo"],
+            options_list=["--tls-key-algo"],
             arg_type=get_enum_type(TlsKeyAlgo, default=None),
             help="Algorithm for private key. ",
             arg_group="TLS Auto",
         )
         context.argument(
             "tls_auto_key_rotation_policy",
-            options_list=["--x509-key-rotation"],
+            options_list=["--tls-key-rotation"],
             arg_type=get_enum_type(TlsKeyRotation, default=None),
             help="Cert-manager private key rotation policy.",
             arg_group="TLS Auto",
         )
         context.argument(
             "tls_auto_renew_before",
-            options_list=["--x509-renew-before"],
+            options_list=["--tls-renew-before"],
             help="When to begin renewing certificate. Must be specified using a Go time.Duration format (h|m|s). "
             "E.g. 240h for 240 hours and 45m for 45 minutes.",
             arg_group="TLS Auto",
         )
         context.argument(
             "tls_auto_san_dns",
-            options_list=["--x509-san-dns"],
+            options_list=["--tls-san-dns"],
             nargs="+",
             help="DNS subject alternative names for the certificate. Use space-separated values.",
             arg_group="TLS Auto",
         )
         context.argument(
             "tls_auto_san_ip",
-            options_list=["--x509-san-ip"],
+            options_list=["--tls-san-ip"],
             nargs="+",
             help="IP subject alternative names for the certificate. Use space-separated values.",
             arg_group="TLS Auto",
         )
         context.argument(
             "tls_auto_secret_name",
-            options_list=["--x509-secret-name"],
+            options_list=["--tls-secret-name"],
             help="Secret for storing server certificate. Any existing data will be overwritten. This is a reference to "
             "the secret through an identifying name, not the secret itself.",
             arg_group="TLS Auto",
         )
         context.argument(
             "tls_manual_secret_ref",
-            options_list=["--x509-secret-ref"],
+            options_list=["--tls-man-secret-ref"],
             help="Secret containing an X.509 client certificate. This is a "
             "reference to the secret through an identifying name, not the secret itself.",
             arg_group="TLS Manual",
