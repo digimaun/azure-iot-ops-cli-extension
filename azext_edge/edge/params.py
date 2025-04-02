@@ -31,7 +31,7 @@ from .providers.edge_api import (
 from .providers.orchestration.common import (
     EXTENSION_MONIKER_TO_ALIAS_MAP,
     TRUST_SETTING_KEYS,
-    X509_ISSUER_REF_MAP,
+    X509_ISSUER_REF_KEYS,
     ConfigSyncModeType,
     IdentityUsageType,
     KubernetesDistroType,
@@ -127,6 +127,12 @@ def load_iotops_arguments(self, _):
             "should contain an object with properties compatible with the ARM representation of the resource. "
             "The object correlates directly with 'properties:{}' of the ARM resource.",
             arg_group="Config",
+        )
+        context.argument(
+            "show_config",
+            options_list=["--show-config"],
+            arg_type=get_three_state_flag(),
+            help="Show the generated resource config instead of invoking the API with it.",
         )
 
     with self.argument_context("iot ops identity") as context:
@@ -329,7 +335,7 @@ def load_iotops_arguments(self, _):
         context.argument(
             "service_type",
             options_list=["--service-type"],
-            arg_type=get_enum_type(MqServiceType, default=MqServiceType.LOADBALANCER.value),
+            arg_type=get_enum_type(MqServiceType, default=None),
             help="Kubernetes service type of the listener. Used when a target listener does not exist.",
         )
         context.argument(
@@ -349,7 +355,7 @@ def load_iotops_arguments(self, _):
             options_list=["--x509-issuer"],
             nargs="+",
             help="Cert-manager issuer reference. Format is space-separated "
-            f"key=value pairs. The following keys are supported: `{'`, `'.join(list(X509_ISSUER_REF_MAP.keys()))}`. "
+            f"key=value pairs. The following keys are supported: `{'`, `'.join(X509_ISSUER_REF_KEYS)}`. "
             "`kind` and `name` are required, while `group` has a default value of 'cert-manager.io'.",
             arg_group="TLS Auto",
         )
@@ -384,18 +390,20 @@ def load_iotops_arguments(self, _):
         context.argument(
             "tls_auto_san_dns",
             options_list=["--x509-san-dns"],
+            nargs="+",
             help="DNS subject alternative names for the certificate. Use space-separated values.",
             arg_group="TLS Auto",
         )
         context.argument(
             "tls_auto_san_ip",
             options_list=["--x509-san-ip"],
+            nargs="+",
             help="IP subject alternative names for the certificate. Use space-separated values.",
             arg_group="TLS Auto",
         )
         context.argument(
             "tls_auto_secret_name",
-            options_list=["--x509-srv-secret-name"],
+            options_list=["--x509-secret-name"],
             help="Secret for storing server certificate. Any existing data will be overwritten. This is a reference to "
             "the secret through an identifying name, not the secret itself.",
             arg_group="TLS Auto",

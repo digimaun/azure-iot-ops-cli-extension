@@ -146,4 +146,4 @@ class TlsKeyRotation(Enum):
     NEVER = "Never"
 
 
-X509_ISSUER_REF_MAP = {"group": "cert-manager.io", "kind": None, "name": None}
+X509_ISSUER_REF_KEYS = ["group", "kind", "name"]

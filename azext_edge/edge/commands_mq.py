@@ -10,6 +10,7 @@ from knack.log import get_logger
 
 from .providers.orchestration.resources import Brokers
 from .common import DEFAULT_BROKER
+from .providers.orchestration.common import MqServiceType
 
 logger = get_logger(__name__)
 
@@ -61,7 +62,7 @@ def add_broker_listener_port(
     resource_group_name: str,
     broker_name: str = DEFAULT_BROKER,
     service_name: Optional[str] = None,
-    service_type: Optional[str] = None,
+    service_type: Optional[str] = MqServiceType.LOADBALANCER.value,
     authn_ref: Optional[str] = None,
     authz_ref: Optional[str] = None,
     protocol: Optional[str] = None,
@@ -75,6 +76,7 @@ def add_broker_listener_port(
     tls_auto_san_ip: Optional[List[str]] = None,
     tls_auto_secret_name: Optional[str] = None,
     tls_manual_secret_ref: Optional[str] = None,
+    show_config: Optional[bool] = None,
     **kwargs,
 ) -> dict:
     return Brokers(cmd).listeners.add_port(
@@ -98,6 +100,7 @@ def add_broker_listener_port(
         tls_auto_san_ip=tls_auto_san_ip,
         tls_auto_secret_name=tls_auto_secret_name,
         tls_manual_secret_ref=tls_manual_secret_ref,
+        show_config=show_config,
         **kwargs,
     )
 

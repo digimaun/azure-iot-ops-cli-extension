@@ -5,14 +5,15 @@
 # ----------------------------------------------------------------------------------------------
 
 from typing import TYPE_CHECKING, Iterable, List, Optional
+from collections import defaultdict
 
-from azure.cli.core.azclierror import ValidationError
+from azure.cli.core.azclierror import ValidationError, InvalidArgumentValueError
 from azure.core.exceptions import ResourceNotFoundError
 from knack.log import get_logger
 from rich.console import Console
 
 from ....util.az_client import wait_for_terminal_state
-from ....util.common import should_continue_prompt
+from ....util.common import should_continue_prompt, parse_kvp_nargs
 from ....util.queryable import Queryable
 from .instances import Instances
 from .reskit import GetInstanceExtLoc, get_file_config
@@ -69,30 +70,6 @@ class BrokerListeners:
         self.ops = ops
         self.get_ext_loc = get_ext_loc
 
-    @classmethod
-    def build_config(
-        safe_params: List[str],
-        service_name: Optional[str] = None,
-        service_type: str = "LoadBalancer",
-        ports: Optional[List[int]] = None,
-        authn: Optional[List[str]] = None,
-        authz: Optional[List[str]] = None,
-        protocol: Optional[List[str]] = None,
-        tls_auto_issuer_name: Optional[List[str]] = None,
-        tls_auto_issuer_kind: Optional[List[str]] = None,
-        tls_auto_issuer_group: Optional[List[str]] = None,
-        tls_manual_x509_secret: Optional[List[str]] = None,
-        san_ip: Optional[List[str]] = None,
-        san_dns: Optional[List[str]] = None,
-    ) -> dict:
-        config = {}
-        config["ports"] = []
-        for port in ports:
-            port_config = {"port": port}
-            config["ports"].append(port_config)
-
-        return config
-
     def create(
         self,
         name: str,
@@ -100,15 +77,9 @@ class BrokerListeners:
         instance_name: str,
         resource_group_name: str,
         config_file: Optional[str] = None,
-        config: Optional[dict] = None,
         **kwargs,
     ) -> dict:
-        if not any([config, config_file]):
-            logger.warning("Please provide listener config via parameters or --config-file.")
-            return
-
-        listener_config = config or get_file_config(config_file)
-
+        listener_config = get_file_config(config_file)
         resource = {}
         resource["extendedLocation"] = self.get_ext_loc(name=instance_name, resource_group_name=resource_group_name)
         resource["properties"] = listener_config
@@ -122,6 +93,58 @@ class BrokerListeners:
                 resource=resource,
             )
             return wait_for_terminal_state(poller, **kwargs)
+
+    def _build_tls_config(
+        self,
+        tls_auto_issuer: Optional[str] = None,
+        tls_auto_duration: Optional[str] = None,
+        tls_auto_key_algo: Optional[str] = None,
+        tls_auto_key_rotation_policy: Optional[str] = None,
+        tls_auto_renew_before: Optional[str] = None,
+        tls_auto_san_dns: Optional[List[str]] = None,
+        tls_auto_san_ip: Optional[List[str]] = None,
+        tls_auto_secret_name: Optional[str] = None,
+        tls_manual_secret_ref: Optional[str] = None,
+    ):
+        config = {}
+        cm_config = defaultdict(dict)
+        man_config = defaultdict(dict)
+
+        if tls_auto_issuer:
+            tls_auto_issuer = parse_kvp_nargs(tls_auto_issuer)
+            issuer_config = {}
+            for key in ["group", "kind", "name"]:
+                if key in tls_auto_issuer:
+                    issuer_config[key] = tls_auto_issuer[key]
+            cm_config["issuerRef"] = tls_auto_issuer
+        if tls_auto_duration:
+            cm_config["duration"] = tls_auto_duration
+        if tls_auto_key_algo:
+            cm_config["privateKey"]["algorithm"] = tls_auto_key_algo
+        if tls_auto_key_rotation_policy:
+            cm_config["privateKey"]["rotationPolicy"] = tls_auto_key_rotation_policy
+        if tls_auto_renew_before:
+            cm_config["renewBefore"] = tls_auto_renew_before
+        if tls_auto_san_dns:
+            cm_config["san"]["dns"] = tls_auto_san_dns
+        if tls_auto_san_ip:
+            cm_config["san"]["ip"] = tls_auto_san_ip
+        if tls_auto_secret_name:
+            cm_config["secretName"] = tls_auto_secret_name
+
+        if tls_manual_secret_ref:
+            man_config["secretRef"] = tls_manual_secret_ref
+
+        if all([cm_config, man_config]):
+            raise InvalidArgumentValueError("TLS may be setup with an automatic or manual config, not both.")
+
+        if cm_config:
+            config["tls"] = {"mode": "Automatic", "certManagerCertificateSpec": dict(cm_config)}
+
+        if man_config:
+            config["tls"] = {"mode": "Manual", "manual": dict(man_config)}
+
+        return config
 
     def add_port(
         self,
@@ -145,6 +168,7 @@ class BrokerListeners:
         tls_auto_san_ip: Optional[List[str]] = None,
         tls_auto_secret_name: Optional[str] = None,
         tls_manual_secret_ref: Optional[str] = None,
+        show_config: Optional[bool] = None,
         **kwargs,
     ) -> dict:
         listener = {}
@@ -164,7 +188,7 @@ class BrokerListeners:
             listener["extendedLocation"] = self.get_ext_loc(
                 name=instance_name, resource_group_name=resource_group_name
             )
-            listener["properties"] = {"serviceName": service_name, "serviceType": service_type}
+            listener["properties"] = {"serviceName": service_name, "serviceType": str(service_type)}
 
         port_configs: List[dict] = listener["properties"].get("ports", [])
         port_config = next(
@@ -179,32 +203,30 @@ class BrokerListeners:
             port_config["protocol"] = protocol
         if nodeport:
             port_config["nodePort"] = nodeport
-        if tls_auto_issuer:
-            pass
-        if tls_auto_duration:
-            pass
-        if tls_auto_key_algo:
-            pass
-        if tls_auto_key_rotation_policy:
-            pass
-        if tls_auto_renew_before:
-            pass
-        if tls_auto_san_dns:
-            pass
-        if tls_auto_san_ip:
-            pass
-        if tls_auto_secret_name:
-            pass
-        if tls_manual_secret_ref:
-            pass
+
+        tls_config = self._build_tls_config(
+            tls_auto_issuer=tls_auto_issuer,
+            tls_auto_duration=tls_auto_duration,
+            tls_auto_key_algo=tls_auto_key_algo,
+            tls_auto_key_rotation_policy=tls_auto_key_rotation_policy,
+            tls_auto_renew_before=tls_auto_renew_before,
+            tls_auto_san_dns=tls_auto_san_dns,
+            tls_auto_san_ip=tls_auto_san_ip,
+            tls_auto_secret_name=tls_auto_secret_name,
+            tls_manual_secret_ref=tls_manual_secret_ref,
+        )
+        port_config.update(tls_config)
 
         if not any(port_config["port"] == port for port_config in port_configs):
             port_configs.append(port_config)
             listener["properties"]["ports"] = port_configs
+
+        if show_config:
+            return port_config
+
         import pdb
 
         pdb.set_trace()
-
         with console.status("Working..."):
             poller = self.ops.begin_create_or_update(
                 resource_group_name=resource_group_name,
