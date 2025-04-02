@@ -863,7 +863,7 @@ def get_insecure_listener(instance_name: str, broker_name: str) -> dict:
             "type": "CustomLocation",
         },
         "properties": {
-            "serviceType": MqServiceType.load_balancer.value,
+            "serviceType": MqServiceType.LOADBALANCER.value,
             "serviceName": AIO_INSECURE_LISTENER_SERVICE_NAME,
             "ports": [
                 {
