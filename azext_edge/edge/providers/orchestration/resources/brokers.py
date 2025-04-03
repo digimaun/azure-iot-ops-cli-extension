@@ -157,8 +157,8 @@ class BrokerListeners:
         resource_group_name: str,
         service_name: Optional[str] = None,
         service_type: Optional[str] = "LoadBalancer",
-        authn: Optional[str] = None,
-        authz: Optional[str] = None,
+        authn_ref: Optional[str] = None,
+        authz_ref: Optional[str] = None,
         protocol: Optional[str] = None,
         nodeport: Optional[int] = None,
         tls_auto_issuer_ref: Optional[str] = None,
@@ -190,16 +190,18 @@ class BrokerListeners:
                 name=instance_name, resource_group_name=resource_group_name
             )
             listener["properties"] = {"serviceType": str(service_type)}
+            if service_name:
+                listener["properties"]["serviceName"] = service_name
 
         port_configs: List[dict] = listener["properties"].get("ports", [])
         port_config = next(
             (port_config for port_config in port_configs if port_config["port"] == port), {"port": port}
         )
 
-        if authn:
-            port_config["authenticationRef"] = authn
-        if authz:
-            port_config["authorizationRef"] = authz
+        if authn_ref:
+            port_config["authenticationRef"] = authn_ref
+        if authz_ref:
+            port_config["authorizationRef"] = authz_ref
         if protocol:
             port_config["protocol"] = protocol
         if nodeport:
