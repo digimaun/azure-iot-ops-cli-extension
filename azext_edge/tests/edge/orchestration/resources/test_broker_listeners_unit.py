@@ -241,7 +241,6 @@ def test_broker_listener_create(mocked_cmd, mocked_responses: responses, mocked_
     assert request_payload["extendedLocation"] == mock_instance_record["extendedLocation"]
 
 
-@pytest.mark.parametrize("show_config", [False])
 @pytest.mark.parametrize(
     "existing_listener_config",
     [
@@ -395,13 +394,14 @@ def test_broker_listener_port_add(
     mocked_responses: responses,
     scenario: dict,
     existing_listener_config: Optional[dict],
-    show_config: bool,
 ):
     instance_name = generate_random_string()
     resource_group_name = generate_random_string()
     listener_name = generate_random_string()
 
     scenario_inputs: dict = scenario.get("input", {})
+    # if show_config:
+    #     scenario_inputs["show_config"] = True
     broker_name = scenario_inputs.get("broker_name")
     expected_payload = scenario.get("expected_payload")
 
@@ -461,20 +461,17 @@ def test_broker_listener_port_add(
         **get_listener_kwargs,
     )
 
-    if not show_config:
-        put_response = mocked_responses.add(
-            method=responses.PUT,
-            url=get_broker_listener_endpoint(
-                resource_group_name=resource_group_name,
-                instance_name=instance_name,
-                broker_name=broker_name or DEFAULT_BROKER,
-                listener_name=listener_name,
-            ),
-            json=expected_listener_request,
-            status=200,
-        )
-    else:
-        scenario["input"]["show_config"] = True
+    put_response = mocked_responses.add(
+        method=responses.PUT,
+        url=get_broker_listener_endpoint(
+            resource_group_name=resource_group_name,
+            instance_name=instance_name,
+            broker_name=broker_name or DEFAULT_BROKER,
+            listener_name=listener_name,
+        ),
+        json=expected_listener_request,
+        status=200,
+    )
 
     create_result = add_broker_listener_port(
         cmd=mocked_cmd,
@@ -482,10 +479,12 @@ def test_broker_listener_port_add(
         instance_name=instance_name,
         resource_group_name=resource_group_name,
         wait_sec=0.1,
-        **scenario["input"],
+        **scenario_inputs,
     )
+    # if show_config:
+    #     assert create_result == expected_listener_request["properties"]
+    #     return
+
     assert create_result == expected_listener_request
     request_payload = json.loads(put_response.calls[0].request.body)
     assert request_payload == expected_listener_request
-
-    # assert request_payload["extendedLocation"] == mock_instance_record["extendedLocation"]

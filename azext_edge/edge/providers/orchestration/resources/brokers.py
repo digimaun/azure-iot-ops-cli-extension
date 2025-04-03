@@ -4,16 +4,16 @@
 # Licensed under the MIT License. See License file in the project root for license information.
 # ----------------------------------------------------------------------------------------------
 
-from typing import TYPE_CHECKING, Iterable, List, Optional
 from collections import defaultdict
+from typing import TYPE_CHECKING, Iterable, List, Optional
 
-from azure.cli.core.azclierror import ValidationError, InvalidArgumentValueError
+from azure.cli.core.azclierror import InvalidArgumentValueError
 from azure.core.exceptions import ResourceNotFoundError
 from knack.log import get_logger
 from rich.console import Console
 
 from ....util.az_client import wait_for_terminal_state
-from ....util.common import should_continue_prompt, parse_kvp_nargs
+from ....util.common import parse_kvp_nargs, should_continue_prompt
 from ....util.queryable import Queryable
 from .instances import Instances
 from .reskit import GetInstanceExtLoc, get_file_config
