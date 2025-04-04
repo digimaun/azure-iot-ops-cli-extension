@@ -302,6 +302,13 @@ def test_broker_listener_create(mocked_cmd, mocked_responses: responses, mocked_
             },
         },
         {
+            "input": {"port": 1883, "service_type": "ClusterIp", "show_config": True},
+            "expected_payload": {
+                "ports": [{"port": 1883}],
+                "serviceType": "ClusterIp",
+            },
+        },
+        {
             "input": {
                 "port": 1883,
                 "service_type": "NodePort",
@@ -400,8 +407,6 @@ def test_broker_listener_port_add(
     listener_name = generate_random_string()
 
     scenario_inputs: dict = scenario.get("input", {})
-    # if show_config:
-    #     scenario_inputs["show_config"] = True
     broker_name = scenario_inputs.get("broker_name")
     expected_payload = scenario.get("expected_payload")
 
@@ -461,17 +466,19 @@ def test_broker_listener_port_add(
         **get_listener_kwargs,
     )
 
-    put_response = mocked_responses.add(
-        method=responses.PUT,
-        url=get_broker_listener_endpoint(
-            resource_group_name=resource_group_name,
-            instance_name=instance_name,
-            broker_name=broker_name or DEFAULT_BROKER,
-            listener_name=listener_name,
-        ),
-        json=expected_listener_request,
-        status=200,
-    )
+    show_config = scenario_inputs.get("show_config")
+    if not show_config:
+        put_response = mocked_responses.add(
+            method=responses.PUT,
+            url=get_broker_listener_endpoint(
+                resource_group_name=resource_group_name,
+                instance_name=instance_name,
+                broker_name=broker_name or DEFAULT_BROKER,
+                listener_name=listener_name,
+            ),
+            json=expected_listener_request,
+            status=200,
+        )
 
     create_result = add_broker_listener_port(
         cmd=mocked_cmd,
@@ -481,9 +488,9 @@ def test_broker_listener_port_add(
         wait_sec=0.1,
         **scenario_inputs,
     )
-    # if show_config:
-    #     assert create_result == expected_listener_request["properties"]
-    #     return
+    if show_config:
+        assert create_result == expected_listener_request["properties"]
+        return
 
     assert create_result == expected_listener_request
     request_payload = json.loads(put_response.calls[0].request.body)
