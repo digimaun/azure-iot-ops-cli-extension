@@ -222,5 +222,24 @@ def should_continue_prompt(confirm_yes: Optional[bool] = None, context: str = "D
     return True
 
 
-def insert_newlines(s: str, every: int = 79):
+def insert_newlines(s: str, every: int = 79) -> str:
     return "\n".join(s[i : i + every] for i in range(0, len(s), every))
+
+
+def parse_dot_notation(pairs: List[str]) -> dict:
+    """
+    ["a.b=value1", "a.c.d=value2"] -> {"a": {"b": "value1", "c": {"d": "value2"}}}
+    """
+    result = {}
+    for pair in pairs:
+        path, sep, value = pair.partition("=")
+        if not sep:
+            continue
+        keys = path.strip().split(".")
+        current = result
+        for key in keys[:-1]:
+            if not isinstance(current.get(key), dict):
+                current[key] = {}
+            current = current[key]
+        current[keys[-1]] = value.strip()
+    return result

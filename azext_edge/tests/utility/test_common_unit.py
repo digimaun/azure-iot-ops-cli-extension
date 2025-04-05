@@ -6,11 +6,17 @@
 
 import string
 from os import environ
-from typing import Tuple, List
+from typing import List, Tuple
 
 import pytest
 
-from azext_edge.edge.util import is_env_flag_enabled, url_safe_random_chars, is_enabled_str, parse_kvp_nargs
+from azext_edge.edge.util import (
+    is_enabled_str,
+    is_env_flag_enabled,
+    parse_dot_notation,
+    parse_kvp_nargs,
+    url_safe_random_chars,
+)
 
 from ..generators import generate_random_string
 
@@ -60,7 +66,7 @@ def test_is_enabled(input_pair: Tuple[str, bool]):
 
 
 @pytest.mark.parametrize(
-    "input,expected",
+    "input_data,expected",
     [
         ([], {}),
         (None, {}),
@@ -72,6 +78,28 @@ def test_is_enabled(input_pair: Tuple[str, bool]):
         (["a=b", "c=d", "123=456"], {"a": "b", "c": "d", "123": "456"}),
     ],
 )
-def test_parse_kvp_nargs(input: List[str], expected: dict):
-    result = parse_kvp_nargs(input)
+def test_parse_kvp_nargs(input_data: List[str], expected: dict):
+    result = parse_kvp_nargs(input_data)
     assert result == expected
+
+
+@pytest.mark.parametrize(
+    "input_data,expected",
+    [
+        (["a.b.c=value"], {"a": {"b": {"c": "value"}}}),
+        (["a.b.c=value1", "a.b.d=value2"], {"a": {"b": {"c": "value1", "d": "value2"}}}),
+        (["x.y=value3"], {"x": {"y": "value3"}}),
+        (["a.b=value1", "a.c=value2"], {"a": {"b": "value1", "c": "value2"}}),
+        (
+            ["user.name.first=John", "user.name.last=Doe", "user.age=30"],
+            {"user": {"name": {"first": "John", "last": "Doe"}, "age": "30"}},
+        ),
+        (["a.b.c=value", "a.b=value2"], {"a": {"b": "value2"}}),
+        (["a=value", "a.b=value2"], {"a": {"b": "value2"}}),
+        (["a.b.c"], {}),
+        (["a.b=CN = Contoso Intermediate CA"], {"a": {"b": "CN = Contoso Intermediate CA"}}),
+        (["a.b = some value "], {"a": {"b": "some value"}}),
+    ],
+)
+def test_parse_dot_notation(input_data: List[str], expected: dict):
+    assert parse_dot_notation(input_data) == expected
