@@ -183,7 +183,7 @@ def create_broker_authn(
     )
 
 
-def add_broker_authn(
+def add_broker_authn_method(
     cmd,
     authn_name: str,
     instance_name: str,
@@ -196,9 +196,10 @@ def add_broker_authn(
     custom_x509_secret_ref: Optional[str] = None,
     custom_http_headers: Optional[List[str]] = None,
     broker_name: str = DEFAULT_BROKER,
+    show_config: Optional[bool] = None,
     **kwargs,
 ) -> dict:
-    return Brokers(cmd).authns.add(
+    return Brokers(cmd).authns.add_method(
         name=authn_name,
         broker_name=broker_name,
         instance_name=instance_name,
@@ -210,6 +211,7 @@ def add_broker_authn(
         custom_ca_cm=custom_ca_cm,
         custom_x509_secret_ref=custom_x509_secret_ref,
         custom_http_headers=custom_http_headers,
+        show_config=show_config,
         **kwargs,
     )
 

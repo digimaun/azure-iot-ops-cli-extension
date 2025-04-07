@@ -387,10 +387,10 @@ class BrokerAuthn:
             methods.append(dict(custom_config))
 
         if not methods:
-            raise InvalidArgumentValueError("At least one authn method is required.")
+            raise InvalidArgumentValueError("At least one authn config is required.")
         return methods
 
-    def add(
+    def add_method(
         self,
         name: str,
         broker_name: str,
@@ -403,8 +403,19 @@ class BrokerAuthn:
         custom_ca_cm: Optional[str] = None,
         custom_x509_secret_ref: Optional[str] = None,
         custom_http_headers: Optional[List[str]] = None,
+        show_config: Optional[bool] = None,
         **kwargs,
     ):
+        methods = self._build_authn_methods(
+            sat_audiences=sat_audiences,
+            x509_client_ca_cm=x509_client_ca_cm,
+            x509_attrs=x509_attrs,
+            custom_endpoint=custom_endpoint,
+            custom_ca_cm=custom_ca_cm,
+            custom_x509_secret_ref=custom_x509_secret_ref,
+            custom_http_headers=custom_http_headers,
+        )
+
         authn = {}
         try:
             authn = self.show(
@@ -422,18 +433,11 @@ class BrokerAuthn:
             authn["properties"] = {}
 
         authn_methods: List[dict] = authn["properties"].get("authenticationMethods", [])
-        authn_methods.extend(
-            self._build_authn_methods(
-                sat_audiences=sat_audiences,
-                x509_client_ca_cm=x509_client_ca_cm,
-                x509_attrs=x509_attrs,
-                custom_endpoint=custom_endpoint,
-                custom_ca_cm=custom_ca_cm,
-                custom_x509_secret_ref=custom_x509_secret_ref,
-                custom_http_headers=custom_http_headers,
-            )
-        )
+        authn_methods.extend(methods)
         authn["properties"]["authenticationMethods"] = authn_methods
+
+        if show_config:
+            return authn["properties"]
 
         with console.status("Working..."):
             poller = self.ops.begin_create_or_update(

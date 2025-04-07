@@ -5,6 +5,7 @@
 # ----------------------------------------------------------------------------------------------
 
 import json
+from copy import deepcopy
 from typing import Optional
 from unittest.mock import Mock
 
@@ -452,7 +453,7 @@ def test_broker_listener_port_add(
             listener_name=listener_name,
             properties=existing_listener_config,
         )
-        expected_listener_request = dict(mock_listener_record)
+        expected_listener_request = deepcopy(mock_listener_record)
         replaced = False
         for i in range(len(expected_listener_request["properties"]["ports"])):
             if expected_listener_request["properties"]["ports"][i]["port"] == expected_payload["ports"][0]["port"]:
@@ -489,7 +490,7 @@ def test_broker_listener_port_add(
             status=200,
         )
 
-    create_result = add_broker_listener_port(
+    add_result = add_broker_listener_port(
         cmd=mocked_cmd,
         listener_name=listener_name,
         instance_name=instance_name,
@@ -498,10 +499,10 @@ def test_broker_listener_port_add(
         **scenario_inputs,
     )
     if show_config:
-        assert create_result == expected_listener_request["properties"]
+        assert add_result == expected_listener_request["properties"]
         return
 
-    assert create_result == expected_listener_request
+    assert add_result == expected_listener_request
     request_payload = json.loads(put_response.calls[0].request.body)
     assert request_payload == expected_listener_request
 
