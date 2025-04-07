@@ -15,6 +15,7 @@ from .common import (
     parse_kvp_nargs,
     set_log_level,
     should_continue_prompt,
+    upsert_by_discriminator,
     url_safe_hash_phrase,
     url_safe_random_chars,
 )
@@ -41,6 +42,7 @@ __all__ = [
     "is_env_flag_enabled",
     "parse_dot_notation",
     "parse_kvp_nargs",
+    "upsert_by_discriminator",
     "url_safe_hash_phrase",
     "url_safe_random_chars",
     "should_continue_prompt",

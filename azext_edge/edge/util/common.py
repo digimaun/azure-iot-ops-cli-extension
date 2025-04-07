@@ -243,3 +243,13 @@ def parse_dot_notation(pairs: List[str]) -> dict:
             current = current[key]
         current[keys[-1]] = value.strip()
     return result
+
+
+def upsert_by_discriminator(initial: List[Dict[str, dict]], disc_key: str, config: dict):
+    disc = config.get(disc_key)
+    for i, d in enumerate(initial):
+        if d.get(disc_key) == disc:
+            initial[i] = config
+            return initial
+    initial.append(config)
+    return initial

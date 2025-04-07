@@ -15,6 +15,7 @@ from azext_edge.edge.util import (
     is_env_flag_enabled,
     parse_dot_notation,
     parse_kvp_nargs,
+    upsert_by_discriminator,
     url_safe_random_chars,
 )
 
@@ -103,3 +104,38 @@ def test_parse_kvp_nargs(input_data: List[str], expected: dict):
 )
 def test_parse_dot_notation(input_data: List[str], expected: dict):
     assert parse_dot_notation(input_data) == expected
+
+
+@pytest.mark.parametrize(
+    "initial, new_config, disc_key, expected",
+    [
+        (
+            [{"discriminator": "a", "value": 1}, {"discriminator": "b", "value": 2}],
+            {"discriminator": "b", "value": 99},
+            "discriminator",
+            [{"discriminator": "a", "value": 1}, {"discriminator": "b", "value": 99}],
+        ),
+        (
+            [{"discriminator": "a", "value": 1}],
+            {"discriminator": "c", "value": 3},
+            "discriminator",
+            [{"discriminator": "a", "value": 1}, {"discriminator": "c", "value": 3}],
+        ),
+        (
+            [{"type": "x", "data": 1}, {"type": "y", "data": 2}],
+            {"type": "y", "data": 22},
+            "type",
+            [{"type": "x", "data": 1}, {"type": "y", "data": 22}],
+        ),
+        (
+            [{"type": "x", "data": 1}],
+            {"type": "z", "data": 3},
+            "type",
+            [{"type": "x", "data": 1}, {"type": "z", "data": 3}],
+        ),
+        ([], {"discriminator": "a", "value": 1}, "discriminator", [{"discriminator": "a", "value": 1}]),
+    ],
+)
+def test_upsert_by_discriminator(initial, disc_key, new_config, expected):
+    result = upsert_by_discriminator(initial=initial, disc_key=disc_key, config=new_config)
+    assert result == expected

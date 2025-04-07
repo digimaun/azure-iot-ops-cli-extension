@@ -13,7 +13,7 @@ from knack.log import get_logger
 from rich.console import Console
 
 from ....util.az_client import wait_for_terminal_state
-from ....util.common import parse_kvp_nargs, should_continue_prompt, parse_dot_notation
+from ....util.common import parse_kvp_nargs, should_continue_prompt, parse_dot_notation, upsert_by_discriminator
 from ....util.queryable import Queryable
 from .instances import Instances
 from .reskit import GetInstanceExtLoc, get_file_config
@@ -173,31 +173,7 @@ class BrokerListeners:
         show_config: Optional[bool] = None,
         **kwargs,
     ) -> dict:
-        listener = {}
-        try:
-            listener = self.show(
-                name=listener_name,
-                broker_name=broker_name,
-                instance_name=instance_name,
-                resource_group_name=resource_group_name,
-            )
-        except ResourceNotFoundError:
-            pass
-
-        if not listener:
-            listener["name"] = listener_name
-            listener["extendedLocation"] = self.get_ext_loc(
-                name=instance_name, resource_group_name=resource_group_name
-            )
-            listener["properties"] = {"serviceType": str(service_type)}
-            if service_name:
-                listener["properties"]["serviceName"] = service_name
-
-        port_configs: List[dict] = listener["properties"].get("ports", [])
-        port_config = next(
-            (port_config for port_config in port_configs if port_config["port"] == port), {"port": port}
-        )
-
+        port_config = {"port": port}
         if authn_ref:
             port_config["authenticationRef"] = authn_ref
         if authz_ref:
@@ -220,9 +196,30 @@ class BrokerListeners:
         )
         port_config.update(tls_config)
 
-        if not any(port_config["port"] == port for port_config in port_configs):
-            port_configs.append(port_config)
-            listener["properties"]["ports"] = port_configs
+        listener = {}
+        try:
+            listener = self.show(
+                name=listener_name,
+                broker_name=broker_name,
+                instance_name=instance_name,
+                resource_group_name=resource_group_name,
+            )
+        except ResourceNotFoundError:
+            pass
+
+        if not listener:
+            listener["name"] = listener_name
+            listener["extendedLocation"] = self.get_ext_loc(
+                name=instance_name, resource_group_name=resource_group_name
+            )
+            listener["properties"] = {"serviceType": str(service_type)}
+            if service_name:
+                listener["properties"]["serviceName"] = service_name
+
+        port_configs: List[dict] = listener["properties"].get("ports", [])
+        listener["properties"]["ports"] = upsert_by_discriminator(
+            initial=port_configs, disc_key="port", config=port_config
+        )
 
         if show_config:
             return listener["properties"]

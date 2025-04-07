@@ -337,6 +337,7 @@ def test_broker_authn_create(mocked_cmd, mocked_responses: responses, mocked_get
         {
             "input": {},
             "expected_payload": {},
+            "error": (InvalidArgumentValueError, "At least one authn config is required."),
         },
     ],
 )
@@ -350,19 +351,19 @@ def test_broker_authn_method_add(
     scenario_inputs: dict = scenario.get("input", {})
     broker_name = scenario_inputs.get("broker_name")
     expected_payload = scenario.get("expected_payload")
+    error_type, error_msg = scenario.get("error", (None, None))
 
-    if not scenario_inputs:
-        with pytest.raises(InvalidArgumentValueError) as exc:
+    if error_type:
+        with pytest.raises(error_type) as exc:
             add_broker_authn_method(
                 cmd=mocked_cmd,
                 authn_name=authn_name,
                 instance_name=instance_name,
                 resource_group_name=resource_group_name,
-                wait_sec=0.1,
                 **scenario_inputs,
             )
         exc_msg = str(exc.value)
-        assert exc_msg == "At least one authn config is required."
+        assert exc_msg == error_msg
         return
 
     expected_authn_request = {}
