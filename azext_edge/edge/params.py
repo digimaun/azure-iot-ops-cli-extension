@@ -27,6 +27,7 @@ from .providers.edge_api import (
     DeviceRegistryResourceKinds,
     MqResourceKinds,
 )
+from .providers.orchestration.clone import SummaryMode, TemplateMode
 from .providers.orchestration.common import (
     EXTENSION_MONIKER_TO_ALIAS_MAP,
     TRUST_SETTING_KEYS,
@@ -42,7 +43,6 @@ from .providers.orchestration.common import (
     TlsKeyAlgo,
     TlsKeyRotation,
 )
-from .providers.orchestration.backup import SummaryMode, TemplateMode
 
 
 def load_iotops_arguments(self, _):

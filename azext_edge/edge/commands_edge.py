@@ -409,7 +409,7 @@ def instance_identity_remove(
     )
 
 
-def backup_instance(
+def clone_instance(
     cmd,
     instance_name: str,
     resource_group_name: str,
@@ -424,9 +424,9 @@ def backup_instance(
     confirm_yes: Optional[bool] = None,
     **kwargs,
 ) -> dict:
-    from .providers.orchestration.backup import backup_ops_instance
+    from .providers.orchestration.clone import clone_instance
 
-    return backup_ops_instance(
+    return clone_instance(
         cmd=cmd,
         resource_group_name=resource_group_name,
         instance_name=instance_name,
