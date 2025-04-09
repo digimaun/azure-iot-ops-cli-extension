@@ -6,7 +6,7 @@
 
 from enum import Enum
 from json import dumps
-from pathlib import PurePath, Path
+from pathlib import Path, PurePath
 from typing import TYPE_CHECKING, Any, Dict, Iterable, List, Optional, Set, Tuple, Union
 from uuid import uuid4
 
@@ -32,9 +32,9 @@ from ...util import (
 )
 from ...util.az_client import (
     REGISTRY_API_VERSION,
-    wait_for_terminal_state,
-    get_resource_client,
     get_msi_mgmt_client,
+    get_resource_client,
+    wait_for_terminal_state,
 )
 from ...util.id_tools import parse_resource_id
 from .common import (
@@ -49,9 +49,9 @@ from .common import (
     OPS_EXTENSION_DEPS,
     PROVISIONING_STATE_SUCCESS,
 )
+from .connected_cluster import ConnectedCluster
 from .resources import Instances
 from .resources.instances import get_fc_name
-from .connected_cluster import ConnectedCluster
 
 DEFAULT_CONSOLE = Console()
 
@@ -489,7 +489,7 @@ class InstanceRestore:
         )
 
 
-def backup_ops_instance(
+def clone_instance(
     cmd,
     instance_name: str,
     resource_group_name: str,
@@ -504,7 +504,7 @@ def backup_ops_instance(
     confirm_yes: Optional[bool] = None,
     **kwargs,
 ):
-    backup_manager = BackupManager(
+    clone_manager = CloneManager(
         cmd=cmd,
         instance_name=instance_name,
         resource_group_name=resource_group_name,
@@ -512,11 +512,11 @@ def backup_ops_instance(
     )
     bundle_path = get_bundle_path(instance_name, bundle_dir=to_dir)
 
-    backup_state = backup_manager.analyze_cluster()
+    clone_state = clone_manager.analyze_cluster()
 
     if not no_progress:
         render_upgrade_table(
-            backup_state, bundle_path, to_cluster_id, detailed=summary_mode == SummaryMode.DETAILED.value
+            clone_state, bundle_path, to_cluster_id, detailed=summary_mode == SummaryMode.DETAILED.value
         )
 
     if all([not to_dir, not to_cluster_id]):
@@ -526,33 +526,33 @@ def backup_ops_instance(
     if should_bail:
         return
 
-    template_content = backup_state.get_content()
+    template_content = clone_state.get_content()
     template_content.write(bundle_path, template_mode=template_mode, linked_base_uri=linked_base_uri)
 
     if to_cluster_id:
-        restore_client = backup_state.get_restore_client(
+        restore_client = clone_state.get_restore_client(
             to_cluster_id=to_cluster_id, template_mode=template_mode, no_progress=no_progress
         )
         restore_client.deploy(instance_name=to_instance_name, use_self_hosted_issuer=use_self_hosted_issuer)
 
 
 def render_upgrade_table(
-    backup_state: "BackupState",
+    clone_state: "CloneState",
     bundle_path: Optional[PurePath] = None,
     to_cluster_id: Optional[str] = None,
     detailed: bool = False,
 ):
     table = get_default_table(include_name=detailed)
     total = 0
-    for rtype in backup_state.resources:
-        rtype_len = len(backup_state.resources[rtype])
+    for rtype in clone_state.resources:
+        rtype_len = len(clone_state.resources[rtype])
         total += rtype_len
         row_content = [f"{rtype}", f"{rtype_len}"]
         if detailed:
-            row_content.append("\n".join([r["resource_name"] for r in backup_state.resources[rtype]]))
+            row_content.append("\n".join([r["resource_name"] for r in clone_state.resources[rtype]]))
         table.add_row(*row_content)
 
-    table.title += f" of {backup_state.instance_name}\nTotal resources {total}"
+    table.title += f" of {clone_state.instance_name}\nTotal resources {total}"
     DEFAULT_CONSOLE.print(table)
     # DEFAULT_CONSOLE.print(f"Total resources: {total}\n", highlight=True)
 
@@ -586,7 +586,7 @@ def get_default_table(include_name: bool = False) -> Table:
     return table
 
 
-class BackupState:
+class CloneState:
     def __init__(
         self,
         cmd,
@@ -622,7 +622,7 @@ class BackupState:
         )
 
 
-class BackupManager:
+class CloneManager:
     def __init__(
         self,
         cmd,
@@ -649,7 +649,7 @@ class BackupManager:
         self.active_deployment: Dict[StateResourceKey, List[str]] = {}
         self.chunk_size = 800
 
-    def analyze_cluster(self) -> "BackupState":
+    def analyze_cluster(self) -> "CloneState":
         with Progress(
             SpinnerColumn("star"),
             *Progress.get_default_columns(),
@@ -671,7 +671,7 @@ class BackupManager:
             self._analyze_secretsync()
             self._analyze_assets()
 
-            return BackupState(
+            return CloneState(
                 cmd=self.cmd,
                 instance_name=self.instance_name,
                 instances=self.instances,
@@ -758,7 +758,6 @@ class BackupManager:
             EXTENSION_TYPE_SSC: [EXTENSION_TYPE_TO_MONIKER_MAP[EXTENSION_TYPE_PLATFORM]],
             EXTENSION_TYPE_ACS: [
                 EXTENSION_TYPE_TO_MONIKER_MAP[EXTENSION_TYPE_PLATFORM],
-                EXTENSION_TYPE_TO_MONIKER_MAP[EXTENSION_TYPE_OSM],
             ],
             EXTENSION_TYPE_OPS: [EXTENSION_TYPE_TO_MONIKER_MAP[ext_type] for ext_type in list(OPS_EXTENSION_DEPS)],
         }
@@ -766,7 +765,7 @@ class BackupManager:
             self.resource_map.connected_cluster.clusters.extensions.clusterconfig_mgmt_client._config.api_version
         )
         extension_map = self.resource_map.connected_cluster.get_extensions_by_type(
-            *list(EXTENSION_TYPE_TO_MONIKER_MAP.keys())
+            *OPS_EXTENSION_DEPS
         )
         for extension_type in extension_map:
             extension_moniker = EXTENSION_TYPE_TO_MONIKER_MAP[extension_type]

@@ -1959,11 +1959,15 @@ def load_iotops_help():
     ] = """
         type: command
         short-summary: Clone an instance.
+        long-summary: Clone analyzes an instance then reproduces it in an infrastructure-as-code
+          manner via ARM templates. The output of clone may be applied directly to another connected cluster
+          or, be saved locally to use at another time (potentially with modification).
+
         examples:
         - name: Clone an instance to a desired connected cluster.
           text: >
-            az iot ops clone --from-instance-id $INSTANCE_RESOURCE_ID --to-cluster-id $CLUSTER_RESOURCE_ID
+            az iot ops clone -n myinstance -g myresourcegroup --to-cluster-id $CLUSTER_RESOURCE_ID
         - name: Clone an instance to a local directory.
           text: >
-            az iot ops clone --from-instance-id $INSTANCE_RESOURCE_ID --from-group mygroup --to-dir .
+            az iot ops clone -n myinstance -g myresourcegroup --to-dir .
     """
