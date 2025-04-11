@@ -56,6 +56,7 @@ def get_mock_instance_record(
     description: Optional[str] = None,
     tags: Optional[dict] = None,
     features: Optional[dict] = None,
+    cl_name: str = None,
 ) -> dict:
     properties = {"provisioningState": "Succeeded"}
     if description:
@@ -63,11 +64,15 @@ def get_mock_instance_record(
     if features:
         properties["features"] = features
 
+    kwargs = {}
+    if cl_name:
+        kwargs["custom_location_name"] = cl_name
     return get_mock_resource(
         name=name,
         properties=properties,
         resource_group_name=resource_group_name,
         tags=tags,
+        **kwargs,
     )
 
 
