@@ -29,6 +29,18 @@ from azext_edge.edge.util.id_tools import parse_resource_id
 
 from ...generators import generate_random_string, get_zeroed_subscription
 from .resources.conftest import BASE_URL
+from .resources.test_dataflows_unit import (
+    get_dataflow_endpoint as get_dataflow_ep,
+    get_mock_dataflow_record,
+)
+from .resources.test_dataflow_profiles_unit import (
+    get_dataflow_profile_endpoint,
+    get_mock_dataflow_profile_record,
+)
+from .resources.test_dataflow_endpoints_unit import (
+    get_dataflow_endpoint,
+    get_mock_dataflow_endpoint_record,
+)
 from .resources.test_broker_authns_unit import (
     get_broker_authn_endpoint,
     get_mock_broker_authn_record,
@@ -36,6 +48,10 @@ from .resources.test_broker_authns_unit import (
 from .resources.test_broker_authzs_unit import (
     get_broker_authz_endpoint,
     get_mock_broker_authz_record,
+)
+from .resources.test_broker_listeners_unit import (
+    get_broker_listener_endpoint,
+    get_mock_broker_listener_record,
 )
 from .resources.test_brokers_unit import (
     get_broker_endpoint,
@@ -89,6 +105,9 @@ class CloneScenario:
         self.add_authzs()
         self.add_dataflow_profiles()
         self.add_dataflow_endpoints()
+        self.add_dataflows()
+        self.add_assets()
+        self.add_aeps()
         return self
 
     def add_extensions(self: C) -> C:
@@ -193,7 +212,27 @@ class CloneScenario:
         return self
 
     def add_listeners(self: C) -> C:
-        pass
+        mock_listener_record = get_mock_broker_listener_record(
+            listener_name=self.default_listener_name,
+            broker_name=self.default_broker_name,
+            instance_name=self.instance_name,
+            resource_group_name=self.resource_group_name,
+        )
+        payload = {"value": [mock_listener_record]}
+
+        self.responses.add(
+            method=responses.GET,
+            url=get_broker_listener_endpoint(
+                resource_group_name=self.resource_group_name,
+                instance_name=self.instance_name,
+                broker_name=self.default_broker_name,
+            ),
+            json=payload,
+            status=200,
+            content_type="application/json",
+        )
+        self.resource_configs["listeners"] = payload["value"]
+        return self
 
     def add_authns(self: C) -> C:
         mock_authn_record = get_mock_broker_authn_record(
@@ -202,6 +241,8 @@ class CloneScenario:
             instance_name=self.instance_name,
             resource_group_name=self.resource_group_name,
         )
+        payload = {"value": [mock_authn_record]}
+
         self.responses.add(
             method=responses.GET,
             url=get_broker_authn_endpoint(
@@ -209,14 +250,16 @@ class CloneScenario:
                 instance_name=self.instance_name,
                 broker_name=self.default_broker_name,
             ),
-            json={"value": [mock_authn_record]},
+            json=payload,
             status=200,
             content_type="application/json",
         )
-        self.resource_configs["authns"] = [mock_authn_record]
+        self.resource_configs["authns"] = payload["value"]
         return self
 
     def add_authzs(self: C) -> C:
+        payload = {"value": []}
+
         self.responses.add(
             method=responses.GET,
             url=get_broker_authz_endpoint(
@@ -224,21 +267,71 @@ class CloneScenario:
                 instance_name=self.instance_name,
                 broker_name=self.default_broker_name,
             ),
-            json={"value": []},
+            json=payload,
             status=200,
             content_type="application/json",
         )
-        self.resource_configs["authzs"] = []
+        self.resource_configs["authzs"] = payload["value"]
         return self
 
     def add_dataflows(self: C) -> C:
-        pass
+        payload = {"value": []}
+
+        self.responses.add(
+            method=responses.GET,
+            url=get_dataflow_ep(
+                profile_name=self.default_dataflow_profile_name,
+                resource_group_name=self.resource_group_name,
+                instance_name=self.instance_name,
+            ),
+            json=payload,
+            status=200,
+            content_type="application/json",
+        )
+        self.resource_configs["dataflows"] = payload["value"]
+        return self
 
     def add_dataflow_profiles(self: C) -> C:
-        pass
+        mock_dataflow_profile_record = get_mock_dataflow_profile_record(
+            profile_name=self.default_dataflow_endpoint_name,
+            instance_name=self.instance_name,
+            resource_group_name=self.resource_group_name,
+        )
+        payload = {"value": [mock_dataflow_profile_record]}
+
+        self.responses.add(
+            method=responses.GET,
+            url=get_dataflow_profile_endpoint(
+                resource_group_name=self.resource_group_name,
+                instance_name=self.instance_name,
+            ),
+            json=payload,
+            status=200,
+            content_type="application/json",
+        )
+        self.resource_configs["profiles"] = payload["value"]
+        return self
 
     def add_dataflow_endpoints(self: C) -> C:
-        pass
+        mock_dataflow_endpoint_record = get_mock_dataflow_endpoint_record(
+            dataflow_endpoint_name=self.default_dataflow_endpoint_name,
+            instance_name=self.instance_name,
+            resource_group_name=self.resource_group_name,
+        )
+        payload = {"value": [mock_dataflow_endpoint_record]}
+
+        self.responses.add(
+            method=responses.GET,
+            url=get_dataflow_endpoint(
+                resource_group_name=self.resource_group_name,
+                instance_name=self.instance_name,
+            ),
+            json=payload,
+            status=200,
+            content_type="application/json",
+        )
+        self.resource_configs["endpoints"] = payload["value"]
+        return self
 
     def add_assets(self: C) -> C:
         pass
