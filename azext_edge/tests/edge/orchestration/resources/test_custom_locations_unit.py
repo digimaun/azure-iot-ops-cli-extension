@@ -37,7 +37,9 @@ def get_custom_location_endpoint(
     )
 
 
-def get_mock_custom_location_record(name: str, resource_group_name: str, location: Optional[str] = None) -> dict:
+def get_mock_custom_location_record(
+    name: str, resource_group_name: str, location: Optional[str] = None, cluster_name: Optional[str] = None
+) -> dict:
     record = get_mock_resource(
         name=name,
         resource_provider=CUSTOM_LOCATION_RP,
@@ -46,7 +48,7 @@ def get_mock_custom_location_record(name: str, resource_group_name: str, locatio
         properties={
             "hostResourceId": (
                 f"/subscriptions/{ZEROED_SUBSCRIPTION}/resourceGroups/{resource_group_name}"
-                "/providers/Microsoft.Kubernetes/connectedClusters/mycluster"
+                f"/providers/Microsoft.Kubernetes/connectedClusters/{cluster_name or 'mycluster'}"
             ),
             "namespace": "azure-iot-operations",
             "displayName": "location-cbe85",

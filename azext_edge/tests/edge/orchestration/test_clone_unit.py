@@ -10,20 +10,47 @@ from unittest.mock import Mock
 
 import pytest
 import responses
-from .resources.test_instances_unit import (
-    get_instance_endpoint,
-    get_mock_instance_record,
+
+from azext_edge.edge.common import (
+    DEFAULT_BROKER,
+    DEFAULT_BROKER_AUTHN,
+    DEFAULT_BROKER_LISTENER,
+    DEFAULT_DATAFLOW_ENDPOINT,
+    DEFAULT_DATAFLOW_PROFILE,
+)
+from azext_edge.edge.providers.orchestration.clone import CloneManager
+from azext_edge.edge.providers.orchestration.common import (
+    EXTENSION_TYPE_ACS,
+    EXTENSION_TYPE_OPS,
+    EXTENSION_TYPE_PLATFORM,
+    EXTENSION_TYPE_SSC,
+)
+from azext_edge.edge.util.id_tools import parse_resource_id
+
+from ...generators import generate_random_string, get_zeroed_subscription
+from .resources.conftest import BASE_URL
+from .resources.test_broker_authns_unit import (
+    get_broker_authn_endpoint,
+    get_mock_broker_authn_record,
+)
+from .resources.test_broker_authzs_unit import (
+    get_broker_authz_endpoint,
+    get_mock_broker_authz_record,
+)
+from .resources.test_brokers_unit import (
+    get_broker_endpoint,
+    get_mock_broker_record,
 )
 from .resources.test_custom_locations_unit import (
     get_custom_location_endpoint,
     get_mock_custom_location_record,
 )
-from azext_edge.edge.util.id_tools import parse_resource_id
+from .resources.test_instances_unit import (
+    get_instance_endpoint,
+    get_mock_instance_record,
+)
 
-
-from azext_edge.edge.providers.orchestration.clone import CloneManager
-
-from ...generators import generate_random_string
+ZEROED_SUBSCRIPTION = get_zeroed_subscription()
 
 
 C = TypeVar("C", bound="CloneScenario")
@@ -32,107 +59,216 @@ C = TypeVar("C", bound="CloneScenario")
 class CloneScenario:
     def __init__(self, description: str = None):
         self.description = description
+        self.resource_configs = {}
+        self.ext_identities = {}
 
-    def bootstrap(self: C, mocked_responses: responses, instance_name: str, resource_group_name: str):
+    def bootstrap(
+        self: C, mocked_responses: responses, instance_name: str, resource_group_name: str, cluster_name: str
+    ):
         self.responses = mocked_responses
         # self.responses.assert_all_requests_are_fired = False
         self.instance_name = instance_name
         self.resource_group_name = resource_group_name
+        self.cluster_name = cluster_name
         self.cl_name = generate_random_string()
+        self.sr_name = generate_random_string()
+        self.default_broker_name = DEFAULT_BROKER
+        self.default_authn_name = DEFAULT_BROKER_AUTHN
+        self.default_listener_name = DEFAULT_BROKER_LISTENER
+        self.default_dataflow_profile_name = DEFAULT_DATAFLOW_PROFILE
+        self.default_dataflow_endpoint_name = DEFAULT_DATAFLOW_ENDPOINT
+        self.configure_instance()
 
-        mock_instance_record = get_mock_instance_record(
-            name=self.instance_name, resource_group_name=resource_group_name, cl_name=self.cl_name
+    def configure_instance(self: C) -> C:
+        self.add_extensions()
+        self.add_custom_location()
+        self.add_instance()
+        self.add_brokers()
+        self.add_listeners()
+        self.add_authns()
+        self.add_authzs()
+        self.add_dataflow_profiles()
+        self.add_dataflow_endpoints()
+        return self
+
+    def add_extensions(self: C) -> C:
+        extensions_endpoint = (
+            f"{BASE_URL}/subscriptions/{ZEROED_SUBSCRIPTION}/resourceGroups/{self.resource_group_name}"
+            f"/providers/Microsoft.Kubernetes/connectedClusters/{self.cluster_name}/providers"
+            "/Microsoft.KubernetesConfiguration/extensions?api-version=2023-05-01"
         )
-        mocked_responses.add(
+        extensions = {
+            "value": [
+                self._create_extension(EXTENSION_TYPE_PLATFORM, "azure-iot-operations-platform", "1.0.0", "stable"),
+                self._create_extension(EXTENSION_TYPE_SSC, "azure-secrets-store", "1.0.0", "stable"),
+                self._create_extension(EXTENSION_TYPE_ACS, "azure-arc-containerstorage", "1.0.0", "stable"),
+                self._create_extension(EXTENSION_TYPE_OPS, "azure-iot-operations", "1.0.0", "stable"),
+            ]
+        }
+        self.responses.add(
             method=responses.GET,
-            url=get_instance_endpoint(resource_group_name=resource_group_name, instance_name=self.instance_name),
-            json=mock_instance_record,
+            url=extensions_endpoint,
+            json=extensions,
             status=200,
             content_type="application/json",
         )
-        mock_cl_record = get_mock_custom_location_record(name=self.cl_name, resource_group_name=resource_group_name)
-        mocked_responses.add(
+        return self
+
+    def _create_extension(self, ext_type: str, ext_name: str, version: str, train: str) -> dict:
+        ext = {
+            "id": (
+                f"/subscriptions/{ZEROED_SUBSCRIPTION}/resourceGroups/{self.resource_group_name}"
+                f"/providers/Microsoft.Kubernetes/connectedClusters/{self.cluster_name}/providers"
+                f"/Microsoft.KubernetesConfiguration/extensions/{ext_name}"
+            ),
+            "name": ext_name,
+            "type": "Microsoft.KubernetesConfiguration/extensions",
+            "properties": {
+                "extensionType": ext_type,
+                "version": version,
+                "releaseTrain": train,
+                "provisioningState": "Succeeded",
+                "configurationSettings": {},
+            },
+        }
+
+        if ext_type == EXTENSION_TYPE_OPS:
+            identity_id = generate_random_string()
+            ext["identity"] = {
+                "type": "SystemAssigned",
+                "principalId": identity_id,
+                "tenantId": ZEROED_SUBSCRIPTION,
+            }
+            self.ext_identities[ext_type] = identity_id
+
+        return ext
+
+    def add_custom_location(self: C) -> C:
+        mock_cl_record = get_mock_custom_location_record(
+            name=self.cl_name, resource_group_name=self.resource_group_name, cluster_name=self.cluster_name
+        )
+        self.responses.add(
             method=responses.GET,
             url=get_custom_location_endpoint(
-                resource_group_name=resource_group_name, custom_location_name=self.cl_name
+                resource_group_name=self.resource_group_name, custom_location_name=self.cl_name
             ),
             json=mock_cl_record,
             status=200,
             content_type="application/json",
         )
-
-        # mocked_responses.add_callback(
-        #     method=responses.PATCH,
-        #     url=re.compile(CLUSTER_EXTENSIONS_URL_MATCH_RE),
-        #     callback=self.patch_extension_response,
-        # )
-
-    def add_instance_min(self: C) -> C:
-        self.add_cluster()
-        self.add_extension()
-        self.add_custom_location()
-        self.add_instance()
-        self.add_broker()
-        self.add_listener()
-        self.add_authn()
-        self.add_dataflow_profile()
-        self.add_dataflow_endpoint()
+        self.resource_configs["custom_location"] = mock_cl_record
         return self
 
-    def add_cluster(self: C) -> C:
-        pass
-
-    def add_extension(self: C) -> C:
-        pass
-
-    def add_custom_location(self: C) -> C:
-        pass
-
     def add_instance(self: C) -> C:
+        mock_instance_record = get_mock_instance_record(
+            name=self.instance_name,
+            resource_group_name=self.resource_group_name,
+            cl_name=self.cl_name,
+            schema_registry_name=self.sr_name,
+        )
+        self.responses.add(
+            method=responses.GET,
+            url=get_instance_endpoint(resource_group_name=self.resource_group_name, instance_name=self.instance_name),
+            json=mock_instance_record,
+            status=200,
+            content_type="application/json",
+        )
+        self.resource_configs["instance"] = mock_instance_record
+        return self
+
+    def add_brokers(self: C) -> C:
+        mock_broker_record = get_mock_broker_record(
+            broker_name=self.default_broker_name,
+            instance_name=self.instance_name,
+            resource_group_name=self.resource_group_name,
+        )
+        self.responses.add(
+            method=responses.GET,
+            url=get_broker_endpoint(resource_group_name=self.resource_group_name, instance_name=self.instance_name),
+            json={"value": [mock_broker_record]},
+            status=200,
+            content_type="application/json",
+        )
+        self.resource_configs["brokers"] = [mock_broker_record]
+        return self
+
+    def add_listeners(self: C) -> C:
         pass
 
-    def add_broker(self: C) -> C:
+    def add_authns(self: C) -> C:
+        mock_authn_record = get_mock_broker_authn_record(
+            authn_name=self.default_authn_name,
+            broker_name=self.default_broker_name,
+            instance_name=self.instance_name,
+            resource_group_name=self.resource_group_name,
+        )
+        self.responses.add(
+            method=responses.GET,
+            url=get_broker_authn_endpoint(
+                resource_group_name=self.resource_group_name,
+                instance_name=self.instance_name,
+                broker_name=self.default_broker_name,
+            ),
+            json={"value": [mock_authn_record]},
+            status=200,
+            content_type="application/json",
+        )
+        self.resource_configs["authns"] = [mock_authn_record]
+        return self
+
+    def add_authzs(self: C) -> C:
+        self.responses.add(
+            method=responses.GET,
+            url=get_broker_authz_endpoint(
+                resource_group_name=self.resource_group_name,
+                instance_name=self.instance_name,
+                broker_name=self.default_broker_name,
+            ),
+            json={"value": []},
+            status=200,
+            content_type="application/json",
+        )
+        self.resource_configs["authzs"] = []
+        return self
+
+    def add_dataflows(self: C) -> C:
         pass
 
-    def add_listener(self: C) -> C:
+    def add_dataflow_profiles(self: C) -> C:
         pass
 
-    def add_authn(self: C) -> C:
+    def add_dataflow_endpoints(self: C) -> C:
         pass
 
-    def add_authz(self: C) -> C:
+    def add_assets(self: C) -> C:
         pass
 
-    def add_dataflow(self: C) -> C:
-        pass
-
-    def add_dataflow_profile(self: C) -> C:
-        pass
-
-    def add_dataflow_endpoint(self: C) -> C:
-        pass
-
-    def add_asset(self: C) -> C:
-        pass
-
-    def add_aep(self: C) -> C:
+    def add_aeps(self: C) -> C:
         pass
 
 
-@pytest.mark.parametrize("clone_scenario", [CloneScenario().add_instance_min()])
+@pytest.mark.parametrize("clone_scenario", [CloneScenario()])
 def test_clone_manager(
     mocked_cmd: Mock,
     mocked_responses: responses,
     clone_scenario: CloneScenario,
 ):
+    cluster_name = generate_random_string()
     instance_name = generate_random_string()
     resource_group_name = generate_random_string()
 
-    clone_scenario.bootstrap(mocked_responses, resource_group_name=resource_group_name, instance_name=instance_name)
+    clone_scenario.bootstrap(
+        mocked_responses,
+        resource_group_name=resource_group_name,
+        instance_name=instance_name,
+        cluster_name=cluster_name,
+    )
 
     clone_manager = CloneManager(
         cmd=mocked_cmd, resource_group_name=resource_group_name, instance_name=instance_name, no_progress=True
     )
+
+    clone_state = clone_manager.analyze_cluster()
     import pdb
 
     pdb.set_trace()

@@ -25,6 +25,7 @@ from .conftest import (
     get_base_endpoint,
     get_mock_resource,
     get_resource_id,
+    ZEROED_SUBSCRIPTION,
 )
 
 CUSTOM_LOCATION_RP = "Microsoft.ExtendedLocation"
@@ -56,9 +57,19 @@ def get_mock_instance_record(
     description: Optional[str] = None,
     tags: Optional[dict] = None,
     features: Optional[dict] = None,
-    cl_name: str = None,
+    cl_name: Optional[str] = None,
+    schema_registry_name: Optional[str] = None,
 ) -> dict:
-    properties = {"provisioningState": "Succeeded"}
+    properties = {
+        "provisioningState": "Succeeded",
+        "schemaRegistryRef": {
+            "resourceId": (
+                f"/subscriptions/{ZEROED_SUBSCRIPTION}"
+                f"/resourceGroups/{resource_group_name}/providers/Microsoft.DeviceRegistry"
+                f"/schemaRegistries/{schema_registry_name or 'myschemaregistry'}"
+            )
+        },
+    }
     if description:
         properties["description"] = description
     if features:
