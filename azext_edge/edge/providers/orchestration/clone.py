@@ -764,9 +764,7 @@ class CloneManager:
         api_version = (
             self.resource_map.connected_cluster.clusters.extensions.clusterconfig_mgmt_client._config.api_version
         )
-        extension_map = self.resource_map.connected_cluster.get_extensions_by_type(
-            *OPS_EXTENSION_DEPS
-        )
+        extension_map = self.resource_map.connected_cluster.get_extensions_by_type(*OPS_EXTENSION_DEPS)
         for extension_type in extension_map:
             extension_moniker = EXTENSION_TYPE_TO_MONIKER_MAP[extension_type]
             depends_on = depends_on_map.get(extension_type)

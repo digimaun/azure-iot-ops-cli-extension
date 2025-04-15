@@ -5,11 +5,13 @@
 # ----------------------------------------------------------------------------------------------
 
 import re
+import json
 from typing import Optional, TypeVar
 from unittest.mock import Mock
 
 import pytest
 import responses
+import requests
 
 from azext_edge.edge.common import (
     DEFAULT_BROKER,
@@ -26,21 +28,8 @@ from azext_edge.edge.providers.orchestration.common import (
     EXTENSION_TYPE_SSC,
 )
 from azext_edge.edge.util.id_tools import parse_resource_id
-
 from ...generators import generate_random_string, get_zeroed_subscription
-from .resources.conftest import BASE_URL
-from .resources.test_dataflows_unit import (
-    get_dataflow_endpoint as get_dataflow_ep,
-    get_mock_dataflow_record,
-)
-from .resources.test_dataflow_profiles_unit import (
-    get_dataflow_profile_endpoint,
-    get_mock_dataflow_profile_record,
-)
-from .resources.test_dataflow_endpoints_unit import (
-    get_dataflow_endpoint,
-    get_mock_dataflow_endpoint_record,
-)
+from .resources.conftest import BASE_URL, get_request_kpis, RequestKPIs
 from .resources.test_broker_authns_unit import (
     get_broker_authn_endpoint,
     get_mock_broker_authn_record,
@@ -61,10 +50,26 @@ from .resources.test_custom_locations_unit import (
     get_custom_location_endpoint,
     get_mock_custom_location_record,
 )
+from .resources.test_dataflow_endpoints_unit import (
+    get_dataflow_endpoint,
+    get_mock_dataflow_endpoint_record,
+)
+from .resources.test_dataflow_profiles_unit import (
+    get_dataflow_profile_endpoint,
+    get_mock_dataflow_profile_record,
+)
+from .resources.test_dataflows_unit import (
+    get_dataflow_endpoint as get_dataflow_ep,
+)
+from .resources.test_dataflows_unit import (
+    get_mock_dataflow_record,
+)
 from .resources.test_instances_unit import (
     get_instance_endpoint,
     get_mock_instance_record,
 )
+from .resources.test_secretsync_spcs_unit import get_spc_endpoint
+from .resources.test_secretsyncs_unit import get_secretsync_endpoint
 
 ZEROED_SUBSCRIPTION = get_zeroed_subscription()
 
@@ -77,6 +82,7 @@ class CloneScenario:
         self.description = description
         self.resource_configs = {}
         self.ext_identities = {}
+        self.arg_queries = {}
 
     def bootstrap(
         self: C, mocked_responses: responses, instance_name: str, resource_group_name: str, cluster_name: str
@@ -106,8 +112,9 @@ class CloneScenario:
         self.add_dataflow_profiles()
         self.add_dataflow_endpoints()
         self.add_dataflows()
-        self.add_assets()
-        self.add_aeps()
+        self.add_arg_handler()
+        self.add_secretsync_spcs()
+        self.add_secretsyncs()
         return self
 
     def add_extensions(self: C) -> C:
@@ -333,11 +340,61 @@ class CloneScenario:
         self.resource_configs["endpoints"] = payload["value"]
         return self
 
-    def add_assets(self: C) -> C:
-        pass
+    def add_secretsync_spcs(self: C) -> C:
+        payload = {"value": []}
 
-    def add_aeps(self: C) -> C:
-        pass
+        self.responses.add(
+            method=responses.GET,
+            url=get_spc_endpoint(
+                resource_group_name=self.resource_group_name,
+            ),
+            json=payload,
+            status=200,
+            content_type="application/json",
+        )
+        self.resource_configs["spcs"] = payload["value"]
+        return self
+
+    def add_secretsyncs(self: C) -> C:
+        payload = {"value": []}
+
+        self.responses.add(
+            method=responses.GET,
+            url=get_secretsync_endpoint(
+                resource_group_name=self.resource_group_name,
+            ),
+            json=payload,
+            status=200,
+            content_type="application/json",
+        )
+        self.resource_configs["secretsyncs"] = payload["value"]
+        return self
+
+    def add_arg_handler(self: C) -> C:
+        def _handle_requests(request: requests.PreparedRequest) -> Optional[tuple]:
+            request_kpis = get_request_kpis(request)
+            if request_kpis.body_str:
+                request_payload = json.loads(request_kpis.body_str)
+                query = request_payload["query"]
+                if '| where type =~ "Microsoft.ManagedIdentity/userAssignedIdentities"' in query:
+                    self.arg_queries["uami"] = 1
+                    return request_kpis.respond_with(200, response_body={"data": []})
+                if "| where type =~ 'microsoft.deviceregistry/assetendpointprofiles'" in query:
+                    self.arg_queries["assetendpointprofiles"] = 1
+                    return request_kpis.respond_with(200, response_body={"data": []})
+                if "| where type =~ 'microsoft.deviceregistry/assets'" in query:
+                    self.arg_queries["assets"] = 1
+                    return request_kpis.respond_with(200, response_body={"data": []})
+            raise RuntimeError("Unexpected query: " + query)
+
+        self.responses.add_callback(
+            method="POST",
+            url=re.compile(
+                r"https://management.azure.com/providers/Microsoft.ResourceGraph/resources\?api-version=2022-10-01"
+            ),
+            callback=_handle_requests,
+        )
+        return self
 
 
 @pytest.mark.parametrize("clone_scenario", [CloneScenario()])

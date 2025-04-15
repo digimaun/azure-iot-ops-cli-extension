@@ -80,6 +80,7 @@ def get_mock_instance_record(
         kwargs["custom_location_name"] = cl_name
     return get_mock_resource(
         name=name,
+        resource_path=f"/instances/{name}",
         properties=properties,
         resource_group_name=resource_group_name,
         tags=tags,
