@@ -339,6 +339,7 @@ class InstanceRestore:
         cluster_resource_id: str,
         template_content: "TemplateContent",
         user_assigned_mis: Optional[List[str]] = None,
+        # TODO eliminate mode, only use split_content
         template_mode: Optional[str] = None,
         no_progress: Optional[bool] = None,
     ):
@@ -759,12 +760,18 @@ class CloneManager:
             EXTENSION_TYPE_ACS: [
                 EXTENSION_TYPE_TO_MONIKER_MAP[EXTENSION_TYPE_PLATFORM],
             ],
-            EXTENSION_TYPE_OPS: [EXTENSION_TYPE_TO_MONIKER_MAP[ext_type] for ext_type in list(OPS_EXTENSION_DEPS)],
+            EXTENSION_TYPE_OPS: [
+                EXTENSION_TYPE_TO_MONIKER_MAP[EXTENSION_TYPE_PLATFORM],
+                EXTENSION_TYPE_TO_MONIKER_MAP[EXTENSION_TYPE_ACS],
+                EXTENSION_TYPE_TO_MONIKER_MAP[EXTENSION_TYPE_SSC],
+            ],
         }
         api_version = (
             self.resource_map.connected_cluster.clusters.extensions.clusterconfig_mgmt_client._config.api_version
         )
-        extension_map = self.resource_map.connected_cluster.get_extensions_by_type(*OPS_EXTENSION_DEPS)
+        extension_map = self.resource_map.connected_cluster.get_extensions_by_type(
+            EXTENSION_TYPE_PLATFORM, EXTENSION_TYPE_ACS, EXTENSION_TYPE_SSC, EXTENSION_TYPE_OPS
+        )
         for extension_type in extension_map:
             extension_moniker = EXTENSION_TYPE_TO_MONIKER_MAP[extension_type]
             depends_on = depends_on_map.get(extension_type)
