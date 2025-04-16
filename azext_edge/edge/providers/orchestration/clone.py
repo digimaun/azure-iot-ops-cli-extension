@@ -803,6 +803,8 @@ class CloneManager:
         ]
         for moniker in cl_monikers:
             ext_resource = self.rcontainer_map.get(moniker)
+            if not ext_resource:
+                continue
             if moniker == EXTENSION_TYPE_TO_MONIKER_MAP[EXTENSION_TYPE_OPS]:
                 cl_extension_ids.append(TEMPLATE_EXPRESSION_MAP["extensionId"].format("', variables('aioExtName')"))
             else:
