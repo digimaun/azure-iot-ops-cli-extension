@@ -79,11 +79,15 @@ ZEROED_SUBSCRIPTION = get_zeroed_subscription()
 
 C = TypeVar("C", bound="CloneScenario")
 
+EXT_NAME_PLAT = "azure-iot-operations-platform"
+EXT_NAME_SSC = "azure-secrets-store"
+EXT_NAME_OPS = "azure-iot-operations"
+
 EXTENSIONS_TYPE_TO_NAME = [
-    (EXTENSION_TYPE_PLATFORM, "azure-iot-operations-platform"),
+    (EXTENSION_TYPE_PLATFORM, EXT_NAME_PLAT),
     (EXTENSION_TYPE_ACS, "azure-arc-containerstorage"),
-    (EXTENSION_TYPE_SSC, "azure-secrets-store"),
-    (EXTENSION_TYPE_OPS, "azure-iot-operations"),
+    (EXTENSION_TYPE_SSC, EXT_NAME_SSC),
+    (EXTENSION_TYPE_OPS, EXT_NAME_OPS),
 ]
 
 
@@ -114,7 +118,7 @@ class CloneScenario:
         self.add_extensions()
         self.add_custom_location()
         self.add_instance()
-        self.add_brokers()
+        self.add_broker()
         self.add_listeners()
         self.add_authns()
         self.add_authzs()
@@ -189,7 +193,7 @@ class CloneScenario:
             status=200,
             content_type="application/json",
         )
-        self.resource_configs["custom_location"] = mock_cl_record
+        self.resource_configs["customLocation"] = mock_cl_record
         return self
 
     def add_instance(self: C) -> C:
@@ -209,7 +213,7 @@ class CloneScenario:
         self.resource_configs["instance"] = mock_instance_record
         return self
 
-    def add_brokers(self: C) -> C:
+    def add_broker(self: C) -> C:
         mock_broker_record = get_mock_broker_record(
             broker_name=self.default_broker_name,
             instance_name=self.instance_name,
@@ -222,7 +226,7 @@ class CloneScenario:
             status=200,
             content_type="application/json",
         )
-        self.resource_configs["brokers"] = [mock_broker_record]
+        self.resource_configs["broker"] = mock_broker_record
         return self
 
     def add_listeners(self: C) -> C:
@@ -487,12 +491,72 @@ EXPECTED_ORD_EXT_RESOURCE_MAP = {
     },
 }
 
+
+def __replace_cl(resource_configs: dict):
+    custom_location = resource_configs["customLocation"]
+
+    ext_map = {
+        v["name"]: v
+        for v in resource_configs["extensions"]
+        if v["name"] in [EXT_NAME_PLAT, EXT_NAME_SSC, EXT_NAME_OPS]
+    }
+    extension_ids = []
+    for ext_name in ext_map:
+        if ext_name == EXT_NAME_OPS:
+            extension_ids.append(
+                (
+                    "[concat(resourceId('Microsoft.Kubernetes/connectedClusters', parameters('clusterName')), "
+                    "'/providers/Microsoft.KubernetesConfiguration/extensions/', variables('aioExtName'))]"
+                )
+            )
+        else:
+            extension_ids.append(
+                (
+                    "[concat(resourceId('Microsoft.Kubernetes/connectedClusters', parameters('clusterName')), "
+                    f"'/providers/Microsoft.KubernetesConfiguration/extensions/{ext_name}')]"
+                )
+            )
+
+    return {
+        "apiVersion": "2021-08-31-preview",
+        "name": "[parameters('customLocationName')]",
+        "properties": {
+            "hostResourceId": "[resourceId('Microsoft.Kubernetes/connectedClusters', parameters('clusterName'))]",
+            "namespace": custom_location["properties"]["namespace"],
+            "displayName": "[parameters('customLocationName')]",
+            "clusterExtensionIds": extension_ids,
+            "authentication": {},
+        },
+        "dependsOn": ["platform", "secretStore", "iotOperations"],
+    }
+
+
 EXPECTED_ORD_MIN_RESOURCE_MAP = {
     **EXPECTED_ORD_EXT_RESOURCE_MAP,
-    "customLocation": {},
-    "instance": {},
+    "customLocation": {"replacements": __replace_cl},
+    "instance": {
+        "replacements": {
+            "apiVersion": "2025-04-01",
+            "name": "[parameters('instanceName')]",
+            "extendedLocation": {
+                "name": "[resourceId('Microsoft.ExtendedLocation/customLocations', parameters('customLocationName'))]",
+                "type": "CustomLocation",
+            },
+            "dependsOn": ["customLocation"],
+        }
+    },
     "roleAssignments_1": {},
-    "broker": {},
+    "broker": {
+        "replacements": {
+            "apiVersion": "2025-04-01",
+            "name": "[concat(parameters('instanceName'), '/default')]",
+            "extendedLocation": {
+                "name": "[resourceId('Microsoft.ExtendedLocation/customLocations', parameters('customLocationName'))]",
+                "type": "CustomLocation",
+            },
+            "dependsOn": ["instance"],
+        }
+    },
     "authns_1": {},
     "listeners_1": {},
     "dataflowEndpoints_1": {},
@@ -558,7 +622,9 @@ class CloneAssertor:
                 resource_keys[i] == expected_resource_keys[i]
             ), f"Expected resource key: {expected_resource_keys[i]} at position {i}"
 
-        self._assert_extensions(content["resources"])
+        resources = content["resources"]
+        self._assert_extensions(resources)
+        self._assert_root_components(resources)
 
     def _assert_extensions(self, resources: dict):
         expected_ext_keys = list(EXPECTED_ORD_EXT_RESOURCE_MAP.keys())
@@ -572,7 +638,21 @@ class CloneAssertor:
             self._prune_resource(extension_config)
             assert extension_config == resources[key_name], f"Extension resource mismatch for {key_name}"
 
+    def _assert_root_components(self, resources: dict):
+        keys = ["customLocation", "instance", "broker"]
+        for key in keys:
+            component_config = deepcopy(self.resource_configs[key])
+            component_meta: dict = EXPECTED_ORD_MIN_RESOURCE_MAP[key]
+            component_replacements = component_meta.get("replacements")
+            if component_replacements:
+                if callable(component_replacements):
+                    component_replacements = component_replacements(self.resource_configs)
+                component_config.update(component_replacements)
+            self._prune_resource(component_config)
+            assert component_config == resources[key], f"Root resource mismatch for {key}"
+
     def _prune_resource(self, resource: dict):
         resource.pop("id", None)
+        resource.pop("systemData", None)
         if "properties" in resource:
             resource["properties"].pop("provisioningState", None)
