@@ -59,6 +59,7 @@ def get_mock_instance_record(
     features: Optional[dict] = None,
     cl_name: Optional[str] = None,
     schema_registry_name: Optional[str] = None,
+    version: Optional[str] = None,
 ) -> dict:
     properties = {
         "provisioningState": "Succeeded",
@@ -69,6 +70,7 @@ def get_mock_instance_record(
                 f"/schemaRegistries/{schema_registry_name or 'myschemaregistry'}"
             )
         },
+        "version": version or "1.1.15",
     }
     if description:
         properties["description"] = description
