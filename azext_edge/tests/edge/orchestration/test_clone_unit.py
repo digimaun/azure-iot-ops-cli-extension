@@ -22,7 +22,12 @@ from azext_edge.edge.common import (
     DEFAULT_DATAFLOW_ENDPOINT,
     DEFAULT_DATAFLOW_PROFILE,
 )
-from azext_edge.edge.providers.orchestration.clone import CloneManager, DEPLOYMENT_CHUNK_SIZE
+from azext_edge.edge.providers.orchestration.clone import (
+    CloneManager,
+    DEPLOYMENT_CHUNK_SIZE,
+    InstanceRestore,
+    default_bundle_name,
+)
 from azext_edge.edge.providers.orchestration.common import (
     EXTENSION_TYPE_ACS,
     EXTENSION_TYPE_OPS,
@@ -412,6 +417,13 @@ class CloneScenario:
         return self
 
 
+def get_deploy_url(cluster_sub_id: str, cluster_rg: str, deployment_name: str, page_num: int = 1) -> str:
+    return (
+        f"{BASE_URL}/subscriptions/{cluster_sub_id}/resourcegroups/{cluster_rg}/providers"
+        f"/Microsoft.Resources/deployments/{deployment_name}_{page_num}?api-version=2024-03-01"
+    )
+
+
 @pytest.mark.parametrize("clone_scenario", [CloneScenario()])
 def test_clone_manager(
     mocked_cmd: Mock,
@@ -441,7 +453,35 @@ def test_clone_manager(
 
     # template_content.write()
     # template_content._get_deployments()
-    # restore_client = clone_state.get_restore_client()
+
+    cluster_sub_id = generate_random_string()
+    cluster_rg = generate_random_string()
+    cluster_name = generate_random_string()
+    to_instance_name = generate_random_string()
+    to_cluster_id = (
+        f"/subscriptions/{cluster_sub_id}/resourceGroups/{cluster_rg}"
+        f"/providers/Microsoft.Kubernetes/connectedClusters/{cluster_name}"
+    )
+    deployment_name = default_bundle_name(instance_name)
+    deploy_responses = []
+    for i in range(len(split_content)):
+        r = mocked_responses.add(
+            method=responses.PUT,
+            url=get_deploy_url(
+                cluster_sub_id=cluster_sub_id, cluster_rg=cluster_rg, deployment_name=deployment_name, page_num=i + 1
+            ),
+            json={},
+            status=200,
+            content_type="application/json",
+        )
+        deploy_responses.append(r)
+    restore_client: InstanceRestore = clone_state.get_restore_client(to_cluster_id=to_cluster_id, template_mode=None)
+    restore_client.deploy(instance_name=to_instance_name)
+    #deploy_responses[0].calls[0].request.body
+    import pdb
+
+    pdb.set_trace()
+    pass
 
 
 EXPECTED_TEMPLATE_KEYS = {
