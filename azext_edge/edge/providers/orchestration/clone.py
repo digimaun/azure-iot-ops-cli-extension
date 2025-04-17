@@ -42,12 +42,9 @@ from .common import (
     CUSTOM_LOCATIONS_API_VERSION,
     EXTENSION_TYPE_ACS,
     EXTENSION_TYPE_OPS,
-    EXTENSION_TYPE_OSM,
     EXTENSION_TYPE_PLATFORM,
     EXTENSION_TYPE_SSC,
     EXTENSION_TYPE_TO_MONIKER_MAP,
-    OPS_EXTENSION_DEPS,
-    PROVISIONING_STATE_SUCCESS,
 )
 from .connected_cluster import ConnectedCluster
 from .resources import Instances

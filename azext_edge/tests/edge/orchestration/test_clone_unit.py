@@ -97,14 +97,26 @@ EXTENSIONS_TYPE_TO_NAME = [
 ]
 
 
+def get_deploy_url(cluster_sub_id: str, cluster_rg: str, deployment_name: str, page_num: int = 1) -> str:
+    return (
+        f"{BASE_URL}/subscriptions/{cluster_sub_id}/resourcegroups/{cluster_rg}/providers"
+        f"/Microsoft.Resources/deployments/{deployment_name}_{page_num}?api-version=2024-03-01"
+    )
+
+
 class CloneScenario:
     def __init__(self, description: str = None):
         self.description = description
         self.resource_configs = defaultdict(dict)
         self.arg_queries = {}
+        self.deploy_responses = []
 
     def bootstrap(
-        self: C, mocked_responses: responses, instance_name: str, resource_group_name: str, cluster_name: str
+        self: C,
+        mocked_responses: responses,
+        instance_name: str,
+        resource_group_name: str,
+        cluster_name: str,
     ):
         self.responses = mocked_responses
         # self.responses.assert_all_requests_are_fired = False
@@ -118,9 +130,9 @@ class CloneScenario:
         self.default_listener_name = DEFAULT_BROKER_LISTENER
         self.default_dataflow_profile_name = DEFAULT_DATAFLOW_PROFILE
         self.default_dataflow_endpoint_name = DEFAULT_DATAFLOW_ENDPOINT
-        self.configure_instance()
+        self._configure_instance()
 
-    def configure_instance(self: C) -> C:
+    def _configure_instance(self: C) -> C:
         self.add_extensions()
         self.add_custom_location()
         self.add_instance()
@@ -134,6 +146,30 @@ class CloneScenario:
         self.add_arg_handler()
         self.add_secretsync_spcs()
         self.add_secretsyncs()
+        return self
+
+    def wrap_cluster_deploy(self: C, split_content: List[dict], to_cluster_id: Optional[str] = None) -> C:
+        if not to_cluster_id:
+            return
+
+        cluster_sub_id = parse_resource_id(to_cluster_id)["subscription"]
+        cluster_rg = parse_resource_id(to_cluster_id)["resource_group"]
+
+        deployment_name = default_bundle_name(self.instance_name)
+        for i in range(len(split_content)):
+            r = self.responses.add(
+                method=responses.PUT,
+                url=get_deploy_url(
+                    cluster_sub_id=cluster_sub_id,
+                    cluster_rg=cluster_rg,
+                    deployment_name=deployment_name,
+                    page_num=i + 1,
+                ),
+                json={},
+                status=200,
+                content_type="application/json",
+            )
+            self.deploy_responses.append(r)
         return self
 
     def add_extensions(self: C) -> C:
@@ -417,13 +453,6 @@ class CloneScenario:
         return self
 
 
-def get_deploy_url(cluster_sub_id: str, cluster_rg: str, deployment_name: str, page_num: int = 1) -> str:
-    return (
-        f"{BASE_URL}/subscriptions/{cluster_sub_id}/resourcegroups/{cluster_rg}/providers"
-        f"/Microsoft.Resources/deployments/{deployment_name}_{page_num}?api-version=2024-03-01"
-    )
-
-
 @pytest.mark.parametrize("clone_scenario", [CloneScenario()])
 def test_clone_manager(
     mocked_cmd: Mock,
@@ -462,22 +491,11 @@ def test_clone_manager(
         f"/subscriptions/{cluster_sub_id}/resourceGroups/{cluster_rg}"
         f"/providers/Microsoft.Kubernetes/connectedClusters/{cluster_name}"
     )
-    deployment_name = default_bundle_name(instance_name)
-    deploy_responses = []
-    for i in range(len(split_content)):
-        r = mocked_responses.add(
-            method=responses.PUT,
-            url=get_deploy_url(
-                cluster_sub_id=cluster_sub_id, cluster_rg=cluster_rg, deployment_name=deployment_name, page_num=i + 1
-            ),
-            json={},
-            status=200,
-            content_type="application/json",
-        )
-        deploy_responses.append(r)
+    clone_scenario.wrap_cluster_deploy(split_content, to_cluster_id=to_cluster_id)
+
     restore_client: InstanceRestore = clone_state.get_restore_client(to_cluster_id=to_cluster_id, template_mode=None)
     restore_client.deploy(instance_name=to_instance_name)
-    #deploy_responses[0].calls[0].request.body
+    # deploy_responses[0].calls[0].request.body
     import pdb
 
     pdb.set_trace()
