@@ -59,8 +59,8 @@ if TYPE_CHECKING:
     from azure.core.polling import LROPoller
 
 
-
 DEPLOYMENT_CHUNK_SIZE = 750
+
 
 class SummaryMode(Enum):
     SIMPLE = "simple"
@@ -371,22 +371,8 @@ class InstanceRestore:
         content: dict,
         parameters: dict,
         deployment_name: str,
-        what_if: bool = False,
     ) -> Optional["LROPoller"]:
         deployment_params = {"properties": {"mode": "Incremental", "template": content, "parameters": parameters}}
-        if what_if:
-            what_if_poller = self.resource_client.deployments.begin_what_if(
-                resource_group_name=self.resource_group_name,
-                deployment_name=deployment_name,
-                parameters=deployment_params,
-            )
-            terminal_what_if_deployment = wait_for_terminal_state(what_if_poller)
-            if (
-                "status" in terminal_what_if_deployment
-                and terminal_what_if_deployment["status"].lower() != PROVISIONING_STATE_SUCCESS.lower()
-            ):
-                raise AzureResponseError(dumps(terminal_what_if_deployment, indent=2))
-            return
 
         return self.resource_client.deployments.begin_create_or_update(
             resource_group_name=self.resource_group_name,
@@ -457,13 +443,7 @@ class InstanceRestore:
             deployment_work.append(self.template_content.content)
         total_pages = len(deployment_work)
 
-        with DEFAULT_CONSOLE.status("Pre-flight...") as console:
-            self._deploy_template(
-                content=deployment_work[0],
-                parameters=parameters,
-                deployment_name=deployment_name,
-                what_if=True,
-            )
+        with DEFAULT_CONSOLE.status("Preparing replication...") as console:
             # TODO
             self._handle_federation(use_self_hosted_issuer)
 
@@ -1199,7 +1179,7 @@ class TemplateContent:
 
     def write(
         self,
-        bundle_path: PurePath,
+        bundle_path: Optional[PurePath] = None,
         template_mode: Optional[str] = None,
         linked_base_uri: Optional[str] = None,
         file_ext: str = "json",
