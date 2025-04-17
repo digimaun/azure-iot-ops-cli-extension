@@ -59,6 +59,9 @@ if TYPE_CHECKING:
     from azure.core.polling import LROPoller
 
 
+
+DEPLOYMENT_CHUNK_SIZE = 750
+
 class SummaryMode(Enum):
     SIMPLE = "simple"
     DETAILED = "detailed"
@@ -1093,7 +1096,7 @@ class CloneManager:
     ):
         data_iter = list(data_iter)
         if data_iter:
-            chunked_list_data = chunk_list(data_iter, self.chunk_size, 750)
+            chunked_list_data = chunk_list(data_iter, self.chunk_size, DEPLOYMENT_CHUNK_SIZE)
 
             for chunk in chunked_list_data:
                 symbolic_name, deployment_name = self.add_deployment_by_key(key)

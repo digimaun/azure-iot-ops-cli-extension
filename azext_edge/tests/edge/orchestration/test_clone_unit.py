@@ -6,7 +6,8 @@
 
 import re
 import json
-from typing import Optional, TypeVar
+from typing import Optional, TypeVar, List, Tuple
+import math
 from unittest.mock import Mock
 from copy import deepcopy
 
@@ -21,7 +22,7 @@ from azext_edge.edge.common import (
     DEFAULT_DATAFLOW_ENDPOINT,
     DEFAULT_DATAFLOW_PROFILE,
 )
-from azext_edge.edge.providers.orchestration.clone import CloneManager
+from azext_edge.edge.providers.orchestration.clone import CloneManager, DEPLOYMENT_CHUNK_SIZE
 from azext_edge.edge.providers.orchestration.common import (
     EXTENSION_TYPE_ACS,
     EXTENSION_TYPE_OPS,
@@ -32,7 +33,7 @@ from collections import defaultdict
 from azext_edge.constants import VERSION as CLI_VERSION
 from azext_edge.edge.util.id_tools import parse_resource_id
 from ...generators import generate_random_string, get_zeroed_subscription
-from .resources.conftest import BASE_URL, get_request_kpis, RequestKPIs
+from .resources.conftest import BASE_URL, get_request_kpis
 from .resources.test_broker_authns_unit import (
     get_broker_authn_endpoint,
     get_mock_broker_authn_record,
@@ -203,6 +204,9 @@ class CloneScenario:
             cl_name=self.cl_name,
             schema_registry_name=self.sr_name,
         )
+        self.resource_configs["schemaRegistryId"] = mock_instance_record["properties"]["schemaRegistryRef"][
+            "resourceId"
+        ]
         self.responses.add(
             method=responses.GET,
             url=get_instance_endpoint(resource_group_name=self.resource_group_name, instance_name=self.instance_name),
@@ -327,7 +331,7 @@ class CloneScenario:
             status=200,
             content_type="application/json",
         )
-        self.resource_configs["profiles"] = payload["value"]
+        self.resource_configs["dataflowProfiles"] = payload["value"]
         return self
 
     def add_dataflow_endpoints(self: C) -> C:
@@ -348,7 +352,7 @@ class CloneScenario:
             status=200,
             content_type="application/json",
         )
-        self.resource_configs["endpoints"] = payload["value"]
+        self.resource_configs["dataflowEndpoints"] = payload["value"]
         return self
 
     def add_secretsync_spcs(self: C) -> C:
@@ -438,10 +442,6 @@ def test_clone_manager(
     # template_content.write()
     # template_content._get_deployments()
     # restore_client = clone_state.get_restore_client()
-    import pdb
-
-    pdb.set_trace()
-    pass
 
 
 EXPECTED_TEMPLATE_KEYS = {
@@ -492,7 +492,8 @@ EXPECTED_ORD_EXT_RESOURCE_MAP = {
 }
 
 
-def __replace_cl(resource_configs: dict):
+def __replace_cl(context: dict) -> dict:
+    resource_configs = context["resource_configs"]
     custom_location = resource_configs["customLocation"]
 
     ext_map = {
@@ -531,6 +532,27 @@ def __replace_cl(resource_configs: dict):
     }
 
 
+def __replace_instance_resource(context: dict) -> dict:
+    config = context["config"]
+    config_type: str = config["type"]
+    config_name: str = config["name"]
+    type_segment = config_type.split("/")[-1].lower()
+
+    if type_segment in ["authentications", "authorizations", "listeners"]:
+        config_name = f"/default/{config_name}"
+    if type_segment in ["dataflowprofiles", "dataflowendpoints", "dataflows"]:
+        config_name = f"/{config_name}"
+
+    return {
+        "apiVersion": "2025-04-01",
+        "name": f"[concat(parameters('instanceName'), '{config_name}')]",
+        "extendedLocation": {
+            "name": "[resourceId('Microsoft.ExtendedLocation/customLocations', parameters('customLocationName'))]",
+            "type": "CustomLocation",
+        },
+    }
+
+
 EXPECTED_ORD_MIN_RESOURCE_MAP = {
     **EXPECTED_ORD_EXT_RESOURCE_MAP,
     "customLocation": {"replacements": __replace_cl},
@@ -557,10 +579,10 @@ EXPECTED_ORD_MIN_RESOURCE_MAP = {
             "dependsOn": ["instance"],
         }
     },
-    "authns_1": {},
-    "listeners_1": {},
-    "dataflowEndpoints_1": {},
-    "dataflowProfiles_1": {},
+    "authns_1": {"replacements": __replace_instance_resource},
+    "listeners_1": {"replacements": __replace_instance_resource},
+    "dataflowEndpoints_1": {"replacements": __replace_instance_resource},
+    "dataflowProfiles_1": {"replacements": __replace_instance_resource},
 }
 
 
@@ -625,6 +647,8 @@ class CloneAssertor:
         resources = content["resources"]
         self._assert_extensions(resources)
         self._assert_root_components(resources)
+        self._assert_role_assignments(resources)
+        self._assert_deployments(resources)
 
     def _assert_extensions(self, resources: dict):
         expected_ext_keys = list(EXPECTED_ORD_EXT_RESOURCE_MAP.keys())
@@ -642,14 +666,134 @@ class CloneAssertor:
         keys = ["customLocation", "instance", "broker"]
         for key in keys:
             component_config = deepcopy(self.resource_configs[key])
-            component_meta: dict = EXPECTED_ORD_MIN_RESOURCE_MAP[key]
-            component_replacements = component_meta.get("replacements")
-            if component_replacements:
-                if callable(component_replacements):
-                    component_replacements = component_replacements(self.resource_configs)
-                component_config.update(component_replacements)
-            self._prune_resource(component_config)
+            self._handle_component_conversion(component_config, key)
             assert component_config == resources[key], f"Root resource mismatch for {key}"
+
+    def _handle_component_conversion(self, component_config: dict, conversion_map_key: str) -> dict:
+        component_meta: dict = EXPECTED_ORD_MIN_RESOURCE_MAP[conversion_map_key]
+        component_replacements = component_meta.get("replacements")
+        if component_replacements:
+            if callable(component_replacements):
+                context = {"config": component_config, "resource_configs": self.resource_configs}
+                component_replacements = component_replacements(context)
+            component_config.update(component_replacements)
+        self._prune_resource(component_config)
+        return component_config
+
+    def _assert_role_assignments(self, resources: dict):
+        key = "roleAssignments_1"
+        deployment = resources[key]
+        parsed_sr_id = parse_resource_id(self.resource_configs["schemaRegistryId"])
+        self._assert_deployment_generic(
+            deployment, key, resource_group=parsed_sr_id["resource_group"], depends_on=["iotOperations"]
+        )
+        if True:  # TODO If template mode is default
+            template = deployment["properties"]["template"]
+            assert (
+                template["$schema"]
+                == "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#"
+            )
+            assert template["contentVersion"] == "1.0.0.0"
+            assert template["parameters"] == {
+                "clusterName": {"type": "string"},
+                "instanceName": {"type": "string"},
+                "principalId": {"type": "string"},
+                "schemaRegistryId": {"type": "string"},
+            }
+            assert isinstance(template["resources"], list), "Deployment resources key should be a list"
+            assert len(template["resources"]) == 1
+            sr_ra_def = template["resources"][0]
+            assert sr_ra_def["type"] == "Microsoft.Authorization/roleAssignments"
+            assert sr_ra_def["apiVersion"] == "2022-04-01"
+            assert (
+                sr_ra_def["name"]
+                == "[guid(parameters('instanceName'), parameters('clusterName'), resourceGroup().id)]"
+            )
+            assert sr_ra_def["scope"] == "[parameters('schemaRegistryId')]"
+            assert (
+                sr_ra_def["properties"]["roleDefinitionId"]
+                == "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', 'b24988ac-6180-42a0-ab88-20f7382dd24c')]"
+            )
+            assert sr_ra_def["properties"]["principalId"] == "[parameters('principalId')]"
+            assert sr_ra_def["properties"]["principalType"] == "ServicePrincipal"
+
+    def _assert_deployments(self, resources: dict):
+        for deployment_key, resource_config_key, depends_on in self._get_deployment_key_pairs():
+            deployment = resources[deployment_key]
+            self._assert_deployment_generic(
+                deployment,
+                deployment_key,
+                depends_on=depends_on,
+            )
+            if True:  # TODO If template mode is default
+                template = deployment["properties"]["template"]
+                assert (
+                    template["$schema"]
+                    == "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#"
+                )
+                assert template["contentVersion"] == "1.0.0.0"
+                assert template["parameters"] == {
+                    "customLocationName": {"type": "string"},
+                    "instanceName": {"type": "string"},
+                }
+                deployment_resources = template["resources"]
+                deployment_resources_len = len(deployment_resources)
+                assert len(deployment_resources) == len(self.resource_configs[resource_config_key])
+                for i in range(deployment_resources_len):
+                    authn_config = deepcopy(self.resource_configs[resource_config_key][i])
+                    self._handle_component_conversion(authn_config, deployment_key)
+                    assert (
+                        authn_config == deployment_resources[i]
+                    ), f"{resource_config_key} resource mismatch at index {i}"
+
+    def _get_deployment_key_pairs(self) -> List[Tuple[str, str, List[str]]]:
+        payload = []
+        dep_map = {"listeners": ["authns", "authnz"], "dataflows": ["dataflowProfiles"]}
+        chunks_map = defaultdict(dict)
+
+        broker_related = {"listeners", "authns", "authzs"}
+
+        for plural in ["authns", "authzs", "listeners", "dataflowProfiles", "dataflowEndpoints", "dataflows"]:
+            kind_len = len(self.resource_configs[plural])
+            chunks = math.ceil(kind_len / DEPLOYMENT_CHUNK_SIZE)
+            chunks_map[plural] = chunks
+            depends_on = []
+
+            if plural in dep_map:
+                for dep in dep_map[plural]:
+                    if dep in chunks_map:
+                        depends_on.append(
+                            f"[resourceId('Microsoft.Resources/deployments', concat(parameters('resourceSlug'), '_{dep}_{chunks_map[dep]}'))]"
+                        )
+            elif plural in broker_related:
+                depends_on.append(
+                    "[resourceId('microsoft.iotoperations/instances/brokers', parameters('instanceName'), 'default')]"
+                )
+            else:
+                depends_on.append("[resourceId('microsoft.iotoperations/instances', parameters('instanceName'))]")
+
+            for i in range(chunks):
+                paged_key = f"{plural}_{i + 1}"
+                payload.append((paged_key, plural, depends_on))
+
+        return payload
+
+    def _assert_deployment_generic(
+        self,
+        deployment: dict,
+        expected_name: str,
+        resource_group: Optional[str] = None,
+        depends_on: Optional[List[str]] = None,
+    ):
+        assert deployment["type"] == "Microsoft.Resources/deployments"
+        assert deployment["apiVersion"] == "2022-09-01"
+        assert deployment["name"] == f"[concat(parameters('resourceSlug'), '_{expected_name}')]"
+        assert deployment["properties"]["mode"] == "Incremental"
+        # assert deployment["properties"]["template"]
+        if resource_group:
+            assert deployment["resourceGroup"] == resource_group
+        if depends_on:
+            assert deployment["dependsOn"] == depends_on
 
     def _prune_resource(self, resource: dict):
         resource.pop("id", None)
