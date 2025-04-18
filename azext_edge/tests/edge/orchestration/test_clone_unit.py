@@ -96,6 +96,9 @@ EXTENSIONS_TYPE_TO_NAME = [
     (EXTENSION_TYPE_OPS, EXT_NAME_OPS),
 ]
 
+PLURALS = ["authns", "authzs", "listeners", "dataflowEndpoints", "dataflowProfiles", "dataflows"]
+SINGLETONS = ["customLocation", "instance", "roleAssignments_1", "broker"]
+
 
 def get_deploy_url(cluster_sub_id: str, cluster_rg: str, deployment_name: str, page_num: int = 1) -> str:
     return (
@@ -117,6 +120,7 @@ class CloneScenario:
         instance_name: str,
         resource_group_name: str,
         cluster_name: str,
+        add_resources_map: Optional[dict] = None,
     ):
         self.responses = mocked_responses
         # self.responses.assert_all_requests_are_fired = False
@@ -130,6 +134,7 @@ class CloneScenario:
         self.default_listener_name = DEFAULT_BROKER_LISTENER
         self.default_dataflow_profile_name = DEFAULT_DATAFLOW_PROFILE
         self.default_dataflow_endpoint_name = DEFAULT_DATAFLOW_ENDPOINT
+        self.add_resources_map = add_resources_map or {}
         self._configure_instance()
 
     def _configure_instance(self: C) -> C:
@@ -281,7 +286,17 @@ class CloneScenario:
             instance_name=self.instance_name,
             resource_group_name=self.resource_group_name,
         )
-        payload = {"value": [mock_listener_record]}
+        listeners = [mock_listener_record]
+        for i in range(1, self.add_resources_map.get("listeners", 0)):
+            listeners.append(
+                get_mock_broker_listener_record(
+                    listener_name=generate_random_string(),
+                    broker_name=self.default_broker_name,
+                    instance_name=self.instance_name,
+                    resource_group_name=self.resource_group_name,
+                )
+            )
+        payload = {"value": listeners}
 
         self.responses.add(
             method=responses.GET,
@@ -453,21 +468,26 @@ class CloneScenario:
         return self
 
 
+@pytest.mark.parametrize("add_listeners", [0, 1, 100, 1000])
 @pytest.mark.parametrize("clone_scenario", [CloneScenario()])
 def test_clone_manager(
     mocked_cmd: Mock,
     mocked_responses: responses,
     clone_scenario: CloneScenario,
+    add_listeners: int,
 ):
     cluster_name = generate_random_string()
     instance_name = generate_random_string()
     resource_group_name = generate_random_string()
+
+    add_resources_map = {"listeners": add_listeners}
 
     clone_scenario.bootstrap(
         mocked_responses,
         resource_group_name=resource_group_name,
         instance_name=instance_name,
         cluster_name=cluster_name,
+        add_resources_map=add_resources_map,
     )
 
     clone_manager = CloneManager(
@@ -478,6 +498,7 @@ def test_clone_manager(
     content = template_content.content
 
     CloneAssertor(clone_scenario).assert_content(content)
+
     split_content = template_content.get_split_content()
 
     # template_content.write()
@@ -625,7 +646,7 @@ EXPECTED_ORD_MIN_RESOURCE_MAP = {
             "dependsOn": ["customLocation"],
         }
     },
-    "roleAssignments_1": {},
+    "roleAssignments": {},
     "broker": {
         "replacements": {
             "apiVersion": "2025-04-01",
@@ -637,10 +658,10 @@ EXPECTED_ORD_MIN_RESOURCE_MAP = {
             "dependsOn": ["instance"],
         }
     },
-    "authns_1": {"replacements": __replace_instance_resource},
-    "listeners_1": {"replacements": __replace_instance_resource},
-    "dataflowEndpoints_1": {"replacements": __replace_instance_resource},
-    "dataflowProfiles_1": {"replacements": __replace_instance_resource},
+    "authns": {"replacements": __replace_instance_resource},
+    "listeners": {"replacements": __replace_instance_resource},
+    "dataflowEndpoints": {"replacements": __replace_instance_resource},
+    "dataflowProfiles": {"replacements": __replace_instance_resource},
 }
 
 
@@ -695,7 +716,7 @@ class CloneAssertor:
         assert isinstance(content["resources"], dict), "Resources key should be a dictionary"
         assert content["resources"], "Resources dict should not be empty"
         resource_keys = list(content["resources"].keys())
-        expected_resource_keys = list(EXPECTED_ORD_MIN_RESOURCE_MAP.keys())
+        expected_resource_keys = self._get_expected_resource_keys()
 
         for i in range(len(expected_resource_keys)):
             assert (
@@ -797,6 +818,11 @@ class CloneAssertor:
                 deployment_resources = template["resources"]
                 deployment_resources_len = len(deployment_resources)
                 assert len(deployment_resources) == len(self.resource_configs[resource_config_key])
+                if deployment_key == "listeners_1":
+                    import pdb
+
+                    pdb.set_trace()
+                    pass
                 for i in range(deployment_resources_len):
                     authn_config = deepcopy(self.resource_configs[resource_config_key][i])
                     self._handle_component_conversion(authn_config, deployment_key)
@@ -811,12 +837,16 @@ class CloneAssertor:
 
         broker_related = {"listeners", "authns", "authzs"}
 
-        for plural in ["authns", "authzs", "listeners", "dataflowProfiles", "dataflowEndpoints", "dataflows"]:
+        for plural in PLURALS:
             kind_len = len(self.resource_configs[plural])
             chunks = math.ceil(kind_len / DEPLOYMENT_CHUNK_SIZE)
             chunks_map[plural] = chunks
             depends_on = []
+            if plural == "listeners":
+                import pdb
 
+                pdb.set_trace()
+                pass
             if plural in dep_map:
                 for dep in dep_map[plural]:
                     if dep in chunks_map:
@@ -835,6 +865,26 @@ class CloneAssertor:
                 payload.append((paged_key, plural, depends_on))
 
         return payload
+
+    def _get_expected_resource_keys(self):
+        resource_keys = []
+        enumerate_through = [*list(EXPECTED_ORD_EXT_RESOURCE_MAP.keys()), *SINGLETONS, *PLURALS]
+
+        for r in enumerate_through:
+            if isinstance(self.resource_configs[r], dict):
+                resource_keys.append(r)
+                continue
+
+            kind_len = len(self.resource_configs[r])
+            if not kind_len:
+                continue
+            chunks = math.ceil(kind_len / DEPLOYMENT_CHUNK_SIZE)
+
+            for i in range(chunks):
+                paged_key = f"{r}_{i + 1}"
+                resource_keys.append(paged_key)
+
+        return resource_keys
 
     def _assert_deployment_generic(
         self,
