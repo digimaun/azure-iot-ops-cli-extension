@@ -40,6 +40,7 @@ from azext_edge.edge.util.id_tools import parse_resource_id
 
 from ...generators import generate_random_string, get_zeroed_subscription
 from .resources.conftest import BASE_URL, get_request_kpis
+from .resources.test_aeps_unit import get_mock_aep_record
 from .resources.test_assets_unit import get_mock_asset_record
 from .resources.test_broker_authns_unit import (
     get_broker_authn_endpoint,
@@ -516,6 +517,7 @@ class CloneScenario:
                 )
                 if '| where type =~ "Microsoft.ManagedIdentity/userAssignedIdentities"' in query:
                     self.arg_queries["uami"] = 1
+                    # TODO: ensure this is only run if SPC client Ids.
                     return request_kpis.respond_with(200, response_body={"data": []})
 
                 if "| where type =~ 'microsoft.deviceregistry/assetendpointprofiles'" in query:
@@ -525,8 +527,8 @@ class CloneScenario:
                     aeps = []
                     for _ in range(self.add_resources_map.get("aeps", 0)):
                         aeps.append(
-                            get_mock_asset_record(
-                                asset_name=generate_random_string(),
+                            get_mock_aep_record(
+                                aep_name=generate_random_string(),
                                 resource_group_name=self.resource_group_name,
                             )
                         )

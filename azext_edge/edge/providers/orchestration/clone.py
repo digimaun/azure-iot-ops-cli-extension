@@ -1018,7 +1018,8 @@ class CloneManager:
 
         ssc_spcs = [spc for spc in ssc_spcs if spc["extendedLocation"]["name"].lower() == ext_loc_id]
         client_ids = [spc["properties"]["clientId"] for spc in ssc_spcs if "clientId" in spc["properties"]]
-        self.instance_identities.extend([mid["id"] for mid in self.get_identities_by_client_id(client_ids)])
+        if client_ids:
+            self.instance_identities.extend([mid["id"] for mid in self.get_identities_by_client_id(client_ids)])
 
         self._add_deployment(
             key=StateResourceKey.SSC_SPC,

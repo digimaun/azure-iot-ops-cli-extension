@@ -38,7 +38,7 @@ def get_mock_secretsync_record(name: str, resource_group_name: str, location: Op
             "kubernetesSecretType": "Opaque",
             "objectSecretMapping": [
                 {"sourcePath": "secret1", "targetKey": "password"},
-                {"sourcePath": "secret1", "targetKey": "username"},
+                {"sourcePath": "secret2", "targetKey": "username"},
             ],
             "secretProviderClassName": "spc-ops-068b143",
             "serviceAccountName": "aio-ssc-sa",

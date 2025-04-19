@@ -8,6 +8,7 @@ from typing import Optional
 
 from .conftest import (
     ZEROED_SUBSCRIPTION,
+    generate_random_string,
     get_base_endpoint,
     get_mock_resource,
 )
@@ -36,7 +37,7 @@ def get_mock_spc_record(name: str, resource_group_name: str, location: Optional[
         location=location,
         properties={
             "provisioningState": "Succeeded",
-            "clientId": ZEROED_SUBSCRIPTION,
+            "clientId": generate_random_string(),
             "keyvaultName": "mykeyvault",
             "objects": "array:\n    - |\n      objectName: secret1\n      objectType: secret\n",
             "tenantId": ZEROED_SUBSCRIPTION,
