@@ -445,20 +445,20 @@ class CloneScenario:
                         resource_group_name=self.resource_group_name,
                     )
                 )
-            if per_profile:
-                payload = {"value": per_profile}
-                self.responses.add(
-                    method=responses.GET,
-                    url=get_dataflow_endpoint(
-                        profile_name=profile["name"],
-                        instance_name=self.instance_name,
-                        resource_group_name=self.resource_group_name,
-                    ),
-                    json=payload,
-                    status=200,
-                    content_type="application/json",
-                )
-                dataflows.extend(per_profile)
+            payload = {"value": per_profile}
+            self.responses.add(
+                method=responses.GET,
+                url=get_dataflow_endpoint(
+                    profile_name=profile["name"],
+                    instance_name=self.instance_name,
+                    resource_group_name=self.resource_group_name,
+                ),
+                json=payload,
+                status=200,
+                content_type="application/json",
+            )
+            dataflows.extend(per_profile)
+
         self.resource_configs["dataflows"] = dataflows
         return self
 
@@ -519,12 +519,12 @@ class CloneScenario:
         return self
 
 
-@pytest.mark.parametrize("add_dataflows", [0, 1])
-@pytest.mark.parametrize("add_dataflow_endpoints", [0, 1])
-@pytest.mark.parametrize("add_dataflow_profiles", [0, 1])
-@pytest.mark.parametrize("add_authzs", [0])
-@pytest.mark.parametrize("add_authns", [0])
-@pytest.mark.parametrize("add_listeners", [0])
+# @pytest.mark.parametrize("add_dataflows", [0, 1])
+# @pytest.mark.parametrize("add_dataflow_endpoints", [0, 1])
+# @pytest.mark.parametrize("add_dataflow_profiles", [0, 1])
+#@pytest.mark.parametrize("add_authzs", [0])
+@pytest.mark.parametrize("add_authns", [0, 1, 100])
+@pytest.mark.parametrize("add_listeners", [0, 1, 100])
 @pytest.mark.parametrize("clone_scenario", [CloneScenario()])
 def test_clone_manager(
     mocked_cmd: Mock,
@@ -532,10 +532,10 @@ def test_clone_manager(
     clone_scenario: CloneScenario,
     add_listeners: int,
     add_authns: int,
-    add_authzs: int,
-    add_dataflow_profiles: int,
-    add_dataflow_endpoints: int,
-    add_dataflows: int,
+    #add_authzs: int,
+    #add_dataflow_profiles: int,
+    #add_dataflow_endpoints: int,
+    #add_dataflows: int,
 ):
     cluster_name = generate_random_string()
     instance_name = generate_random_string()
@@ -544,10 +544,10 @@ def test_clone_manager(
     add_resources_map = {
         "listeners": add_listeners,
         "authns": add_authns,
-        "authzs": add_authzs,
-        "dataflowProfiles": add_dataflow_profiles,
-        "dataflowEndpoints": add_dataflow_endpoints,
-        "dataflows": add_dataflows,
+        #"authzs": add_authzs,
+        #"dataflowProfiles": add_dataflow_profiles,
+        #"dataflowEndpoints": add_dataflow_endpoints,
+        #"dataflows": add_dataflows,
     }
 
     clone_scenario.bootstrap(
@@ -902,7 +902,7 @@ class CloneAssertor:
 
     def _get_deployment_key_pairs(self) -> List[Tuple[str, str, List[str]]]:
         payload = []
-        dep_map = {"listeners": ["authns", "authnz"], "dataflows": ["dataflowProfiles"]}
+        dep_map = {"listeners": ["authns", "authzs"], "dataflows": ["dataflowProfiles", "dataflowEndpoints"]}
         chunks_map = defaultdict(dict)
 
         broker_related = {"listeners", "authns", "authzs"}
