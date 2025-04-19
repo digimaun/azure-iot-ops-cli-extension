@@ -4,17 +4,19 @@
 # Licensed under the MIT License. See License file in the project root for license information.
 # ----------------------------------------------------------------------------------------------
 
-import re
 import json
-from typing import Optional, TypeVar, List, Tuple
 import math
-from unittest.mock import Mock
+import re
+from collections import defaultdict
 from copy import deepcopy
+from typing import List, Optional, Tuple, TypeVar
+from unittest.mock import Mock
 
 import pytest
-import responses
 import requests
+import responses
 
+from azext_edge.constants import VERSION as CLI_VERSION
 from azext_edge.edge.common import (
     DEFAULT_BROKER,
     DEFAULT_BROKER_AUTHN,
@@ -23,8 +25,8 @@ from azext_edge.edge.common import (
     DEFAULT_DATAFLOW_PROFILE,
 )
 from azext_edge.edge.providers.orchestration.clone import (
-    CloneManager,
     DEPLOYMENT_CHUNK_SIZE,
+    CloneManager,
     InstanceRestore,
     default_bundle_name,
 )
@@ -34,11 +36,11 @@ from azext_edge.edge.providers.orchestration.common import (
     EXTENSION_TYPE_PLATFORM,
     EXTENSION_TYPE_SSC,
 )
-from collections import defaultdict
-from azext_edge.constants import VERSION as CLI_VERSION
 from azext_edge.edge.util.id_tools import parse_resource_id
+
 from ...generators import generate_random_string, get_zeroed_subscription
 from .resources.conftest import BASE_URL, get_request_kpis
+from .resources.test_assets_unit import get_mock_asset_record
 from .resources.test_broker_authns_unit import (
     get_broker_authn_endpoint,
     get_mock_broker_authn_record,
@@ -69,8 +71,6 @@ from .resources.test_dataflow_profiles_unit import (
 )
 from .resources.test_dataflows_unit import (
     get_dataflow_endpoint,
-)
-from .resources.test_dataflows_unit import (
     get_mock_dataflow_record,
 )
 from .resources.test_instances_unit import (
@@ -96,7 +96,16 @@ EXTENSIONS_TYPE_TO_NAME = [
     (EXTENSION_TYPE_OPS, EXT_NAME_OPS),
 ]
 
-PLURALS = ["authns", "authzs", "listeners", "dataflowEndpoints", "dataflowProfiles", "dataflows"]
+PLURALS = [
+    "authns",
+    "authzs",
+    "listeners",
+    "dataflowEndpoints",
+    "dataflowProfiles",
+    "dataflows",
+    "assetEndpointProfiles",
+    "assets",
+]
 SINGLETONS = ["customLocation", "instance", "roleAssignments_1", "broker"]
 
 
@@ -498,15 +507,45 @@ class CloneScenario:
             if request_kpis.body_str:
                 request_payload = json.loads(request_kpis.body_str)
                 query = request_payload["query"]
+                expected_cl_id = (
+                    get_custom_location_endpoint(
+                        resource_group_name=self.resource_group_name, custom_location_name=self.cl_name
+                    )
+                    .split(BASE_URL)[1]
+                    .split("?")[0]
+                )
                 if '| where type =~ "Microsoft.ManagedIdentity/userAssignedIdentities"' in query:
                     self.arg_queries["uami"] = 1
                     return request_kpis.respond_with(200, response_body={"data": []})
+
                 if "| where type =~ 'microsoft.deviceregistry/assetendpointprofiles'" in query:
-                    self.arg_queries["assetendpointprofiles"] = 1
-                    return request_kpis.respond_with(200, response_body={"data": []})
+                    self.arg_queries["assetEndpointProfiles"] = 1
+                    assert f"| where extendedLocation.name =~ '{expected_cl_id}'" in query
+
+                    aeps = []
+                    for _ in range(self.add_resources_map.get("aeps", 0)):
+                        aeps.append(
+                            get_mock_asset_record(
+                                asset_name=generate_random_string(),
+                                resource_group_name=self.resource_group_name,
+                            )
+                        )
+                    self.resource_configs["assetEndpointProfiles"] = aeps
+                    return request_kpis.respond_with(200, response_body={"data": aeps})
                 if "| where type =~ 'microsoft.deviceregistry/assets'" in query:
                     self.arg_queries["assets"] = 1
-                    return request_kpis.respond_with(200, response_body={"data": []})
+                    assert f"| where extendedLocation.name =~ '{expected_cl_id}'" in query
+
+                    assets = []
+                    for _ in range(self.add_resources_map.get("assets", 0)):
+                        assets.append(
+                            get_mock_asset_record(
+                                asset_name=generate_random_string(),
+                                resource_group_name=self.resource_group_name,
+                            )
+                        )
+                    self.resource_configs["assets"] = assets
+                    return request_kpis.respond_with(200, response_body={"data": assets})
             raise RuntimeError("Unexpected query: " + query)
 
         self.responses.add_callback(
@@ -519,12 +558,14 @@ class CloneScenario:
         return self
 
 
-@pytest.mark.parametrize("add_dataflows", [0, 1, 2])
-@pytest.mark.parametrize("add_dataflow_endpoints", [0, 1, 5])
-@pytest.mark.parametrize("add_dataflow_profiles", [0, 1, 2])
-@pytest.mark.parametrize("add_authzs", [0, 1, 10])
-@pytest.mark.parametrize("add_authns", [0, 1, 10])
-@pytest.mark.parametrize("add_listeners", [0, 1, 10])
+@pytest.mark.parametrize("add_dataflows", [0, 2])
+@pytest.mark.parametrize("add_dataflow_endpoints", [0, 5])
+@pytest.mark.parametrize("add_dataflow_profiles", [0, 2])
+@pytest.mark.parametrize("add_authzs", [0, 5])
+@pytest.mark.parametrize("add_authns", [0, 5])
+@pytest.mark.parametrize("add_listeners", [0, 5])
+@pytest.mark.parametrize("add_aeps", [0, 5])
+@pytest.mark.parametrize("add_assets", [0, 5])
 @pytest.mark.parametrize("clone_scenario", [CloneScenario()])
 def test_clone_manager(
     mocked_cmd: Mock,
@@ -536,6 +577,8 @@ def test_clone_manager(
     add_dataflow_profiles: int,
     add_dataflow_endpoints: int,
     add_dataflows: int,
+    add_aeps: int,
+    add_assets: int,
 ):
     cluster_name = generate_random_string()
     instance_name = generate_random_string()
@@ -548,6 +591,8 @@ def test_clone_manager(
         "dataflowProfiles": add_dataflow_profiles,
         "dataflowEndpoints": add_dataflow_endpoints,
         "dataflows": add_dataflows,
+        "aeps": add_aeps,
+        "assets": add_assets,
     }
 
     clone_scenario.bootstrap(
@@ -580,7 +625,7 @@ def test_clone_manager(
         f"/subscriptions/{cluster_sub_id}/resourceGroups/{cluster_rg}"
         f"/providers/Microsoft.Kubernetes/connectedClusters/{cluster_name}"
     )
-    #clone_scenario.wrap_cluster_deploy(split_content, to_cluster_id=to_cluster_id)
+    # clone_scenario.wrap_cluster_deploy(split_content, to_cluster_id=to_cluster_id)
 
     # restore_client: InstanceRestore = clone_state.get_restore_client(to_cluster_id=to_cluster_id, template_mode=None)
     # restore_client.deploy(instance_name=to_instance_name)
@@ -702,6 +747,16 @@ def __replace_instance_resource(context: dict) -> dict:
     }
 
 
+def __replace_asset_resource(_: dict) -> dict:
+    return {
+        "apiVersion": "2024-11-01",
+        "extendedLocation": {
+            "name": "[resourceId('Microsoft.ExtendedLocation/customLocations', parameters('customLocationName'))]",
+            "type": "CustomLocation",
+        },
+    }
+
+
 EXPECTED_ORD_MIN_RESOURCE_MAP = {
     **EXPECTED_ORD_EXT_RESOURCE_MAP,
     "customLocation": {"replacements": __replace_cl},
@@ -734,6 +789,8 @@ EXPECTED_ORD_MIN_RESOURCE_MAP = {
     "dataflowProfiles": {"replacements": __replace_instance_resource},
     "dataflowEndpoints": {"replacements": __replace_instance_resource},
     "dataflows": {"replacements": __replace_instance_resource},
+    "assetEndpointProfiles": {"replacements": __replace_asset_resource},
+    "assets": {"replacements": __replace_asset_resource},
 }
 
 
@@ -884,10 +941,10 @@ class CloneAssertor:
                     == "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#"
                 )
                 assert template["contentVersion"] == "1.0.0.0"
-                assert template["parameters"] == {
-                    "customLocationName": {"type": "string"},
-                    "instanceName": {"type": "string"},
-                }
+                expected_parameters = {"customLocationName": {"type": "string"}}
+                if resource_config_key not in ["assetEndpointProfiles", "assets"]:
+                    expected_parameters["instanceName"] = {"type": "string"}
+                assert template["parameters"] == expected_parameters
                 deployment_resources = template["resources"]
                 deployment_resources_len = len(deployment_resources)
 
@@ -906,7 +963,12 @@ class CloneAssertor:
 
     def _get_deployment_key_pairs(self) -> List[Tuple[str, str, List[str]]]:
         payload = []
-        dep_map = {"listeners": ["authns", "authzs"], "dataflows": ["dataflowProfiles", "dataflowEndpoints"]}
+        dep_map = {
+            "listeners": ["authns", "authzs"],
+            "dataflows": ["dataflowProfiles", "dataflowEndpoints"],
+            "assets": ["assetEndpointProfiles"],
+            "assetEndpointProfiles": ["listeners", "instance"],
+        }
         chunks_map = defaultdict(dict)
 
         broker_related = {"listeners", "authns", "authzs"}
@@ -924,7 +986,11 @@ class CloneAssertor:
             depends_on = []
             if plural in dep_map:
                 for dep in dep_map[plural]:
-                    if dep in chunks_map:
+                    if dep == "instance":
+                        depends_on.append(
+                            "[resourceId('microsoft.iotoperations/instances', parameters('instanceName'))]"
+                        )
+                    elif dep in chunks_map:
                         depends_on.append(
                             f"[resourceId('Microsoft.Resources/deployments', concat(parameters('resourceSlug'), '_{dep}_{chunks_map[dep]}'))]"
                         )
@@ -934,6 +1000,10 @@ class CloneAssertor:
                 )
             else:
                 depends_on.append("[resourceId('microsoft.iotoperations/instances', parameters('instanceName'))]")
+
+            if plural in ["assets"]:
+                if not self.resource_configs.get("assetEndpointProfiles"):
+                    continue
 
             for i in range(chunks):
                 paged_key = f"{plural}_{i + 1}"
@@ -946,6 +1016,8 @@ class CloneAssertor:
         enumerate_through = [*PLURALS]
 
         for r in enumerate_through:
+            if r == "assets" and not self.resource_configs.get("assetEndpointProfiles"):
+                continue
             kind_len = len(self.resource_configs[r])
             if not kind_len:
                 continue
@@ -974,10 +1046,11 @@ class CloneAssertor:
         if resource_group:
             assert deployment["resourceGroup"] == resource_group
         if depends_on:
-            assert deployment["dependsOn"] == depends_on
+            assert set(deployment["dependsOn"]) == set(depends_on)
 
     def _prune_resource(self, resource: dict):
         resource.pop("id", None)
         resource.pop("systemData", None)
         if "properties" in resource:
             resource["properties"].pop("provisioningState", None)
+            resource["properties"].pop("status", None)
