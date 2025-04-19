@@ -60,7 +60,7 @@ from .resources.test_custom_locations_unit import (
     get_mock_custom_location_record,
 )
 from .resources.test_dataflow_endpoints_unit import (
-    get_dataflow_endpoint,
+    get_dataflow_endpoint_endpoint,
     get_mock_dataflow_endpoint_record,
 )
 from .resources.test_dataflow_profiles_unit import (
@@ -68,7 +68,7 @@ from .resources.test_dataflow_profiles_unit import (
     get_mock_dataflow_profile_record,
 )
 from .resources.test_dataflows_unit import (
-    get_dataflow_endpoint as get_dataflow_ep,
+    get_dataflow_endpoint,
 )
 from .resources.test_dataflows_unit import (
     get_mock_dataflow_record,
@@ -110,7 +110,7 @@ def get_deploy_url(cluster_sub_id: str, cluster_rg: str, deployment_name: str, p
 class CloneScenario:
     def __init__(self, description: str = None):
         self.description = description
-        self.resource_configs = defaultdict(dict)
+        self.resource_configs = defaultdict(list)
         self.arg_queries = {}
         self.deploy_responses = []
 
@@ -309,7 +309,7 @@ class CloneScenario:
             status=200,
             content_type="application/json",
         )
-        self.resource_configs["listeners"] = payload["value"]
+        self.resource_configs["listeners"] = listeners
         return self
 
     def add_authns(self: C) -> C:
@@ -319,7 +319,17 @@ class CloneScenario:
             instance_name=self.instance_name,
             resource_group_name=self.resource_group_name,
         )
-        payload = {"value": [mock_authn_record]}
+        authns = [mock_authn_record]
+        for i in range(1, self.add_resources_map.get("authns", 0)):
+            authns.append(
+                get_mock_broker_authn_record(
+                    authn_name=generate_random_string(),
+                    broker_name=self.default_broker_name,
+                    instance_name=self.instance_name,
+                    resource_group_name=self.resource_group_name,
+                )
+            )
+        payload = {"value": authns}
 
         self.responses.add(
             method=responses.GET,
@@ -332,11 +342,21 @@ class CloneScenario:
             status=200,
             content_type="application/json",
         )
-        self.resource_configs["authns"] = payload["value"]
+        self.resource_configs["authns"] = authns
         return self
 
     def add_authzs(self: C) -> C:
-        payload = {"value": []}
+        authzs = []
+        for i in range(self.add_resources_map.get("authzs", 0)):
+            authzs.append(
+                get_mock_broker_authz_record(
+                    authz_name=generate_random_string(),
+                    broker_name=self.default_broker_name,
+                    instance_name=self.instance_name,
+                    resource_group_name=self.resource_group_name,
+                )
+            )
+        payload = {"value": authzs}
 
         self.responses.add(
             method=responses.GET,
@@ -352,30 +372,22 @@ class CloneScenario:
         self.resource_configs["authzs"] = payload["value"]
         return self
 
-    def add_dataflows(self: C) -> C:
-        payload = {"value": []}
-
-        self.responses.add(
-            method=responses.GET,
-            url=get_dataflow_ep(
-                profile_name=self.default_dataflow_profile_name,
-                resource_group_name=self.resource_group_name,
-                instance_name=self.instance_name,
-            ),
-            json=payload,
-            status=200,
-            content_type="application/json",
-        )
-        self.resource_configs["dataflows"] = payload["value"]
-        return self
-
     def add_dataflow_profiles(self: C) -> C:
         mock_dataflow_profile_record = get_mock_dataflow_profile_record(
-            profile_name=self.default_dataflow_endpoint_name,
+            profile_name=self.default_dataflow_profile_name,
             instance_name=self.instance_name,
             resource_group_name=self.resource_group_name,
         )
-        payload = {"value": [mock_dataflow_profile_record]}
+        profiles = [mock_dataflow_profile_record]
+        for i in range(self.add_resources_map.get("dataflowProfiles", 0)):
+            profiles.append(
+                get_mock_dataflow_profile_record(
+                    profile_name=generate_random_string(),
+                    instance_name=self.instance_name,
+                    resource_group_name=self.resource_group_name,
+                )
+            )
+        payload = {"value": profiles}
 
         self.responses.add(
             method=responses.GET,
@@ -387,7 +399,7 @@ class CloneScenario:
             status=200,
             content_type="application/json",
         )
-        self.resource_configs["dataflowProfiles"] = payload["value"]
+        self.resource_configs["dataflowProfiles"] = profiles
         return self
 
     def add_dataflow_endpoints(self: C) -> C:
@@ -396,11 +408,20 @@ class CloneScenario:
             instance_name=self.instance_name,
             resource_group_name=self.resource_group_name,
         )
-        payload = {"value": [mock_dataflow_endpoint_record]}
+        endpoints = [mock_dataflow_endpoint_record]
+        for i in range(self.add_resources_map.get("dataflowEndpoints", 0)):
+            endpoints.append(
+                get_mock_dataflow_endpoint_record(
+                    dataflow_endpoint_name=generate_random_string(),
+                    instance_name=self.instance_name,
+                    resource_group_name=self.resource_group_name,
+                )
+            )
+        payload = {"value": endpoints}
 
         self.responses.add(
             method=responses.GET,
-            url=get_dataflow_endpoint(
+            url=get_dataflow_endpoint_endpoint(
                 resource_group_name=self.resource_group_name,
                 instance_name=self.instance_name,
             ),
@@ -408,7 +429,37 @@ class CloneScenario:
             status=200,
             content_type="application/json",
         )
-        self.resource_configs["dataflowEndpoints"] = payload["value"]
+        self.resource_configs["dataflowEndpoints"] = endpoints
+        return self
+
+    def add_dataflows(self: C) -> C:
+        dataflows = []
+        for profile in self.resource_configs["dataflowProfiles"]:
+            per_profile = []
+            for _ in range(self.add_resources_map.get("dataflows", 0)):
+                per_profile.append(
+                    get_mock_dataflow_record(
+                        dataflow_name=generate_random_string(),
+                        profile_name=profile["name"],
+                        instance_name=self.instance_name,
+                        resource_group_name=self.resource_group_name,
+                    )
+                )
+            if per_profile:
+                payload = {"value": per_profile}
+                self.responses.add(
+                    method=responses.GET,
+                    url=get_dataflow_endpoint(
+                        profile_name=profile["name"],
+                        instance_name=self.instance_name,
+                        resource_group_name=self.resource_group_name,
+                    ),
+                    json=payload,
+                    status=200,
+                    content_type="application/json",
+                )
+                dataflows.extend(per_profile)
+        self.resource_configs["dataflows"] = dataflows
         return self
 
     def add_secretsync_spcs(self: C) -> C:
@@ -468,19 +519,36 @@ class CloneScenario:
         return self
 
 
-@pytest.mark.parametrize("add_listeners", [0, 1, 100, 1000])
+@pytest.mark.parametrize("add_dataflows", [0, 1])
+@pytest.mark.parametrize("add_dataflow_endpoints", [0, 1])
+@pytest.mark.parametrize("add_dataflow_profiles", [0, 1])
+@pytest.mark.parametrize("add_authzs", [0])
+@pytest.mark.parametrize("add_authns", [0])
+@pytest.mark.parametrize("add_listeners", [0])
 @pytest.mark.parametrize("clone_scenario", [CloneScenario()])
 def test_clone_manager(
     mocked_cmd: Mock,
     mocked_responses: responses,
     clone_scenario: CloneScenario,
     add_listeners: int,
+    add_authns: int,
+    add_authzs: int,
+    add_dataflow_profiles: int,
+    add_dataflow_endpoints: int,
+    add_dataflows: int,
 ):
     cluster_name = generate_random_string()
     instance_name = generate_random_string()
     resource_group_name = generate_random_string()
 
-    add_resources_map = {"listeners": add_listeners}
+    add_resources_map = {
+        "listeners": add_listeners,
+        "authns": add_authns,
+        "authzs": add_authzs,
+        "dataflowProfiles": add_dataflow_profiles,
+        "dataflowEndpoints": add_dataflow_endpoints,
+        "dataflows": add_dataflows,
+    }
 
     clone_scenario.bootstrap(
         mocked_responses,
@@ -517,9 +585,8 @@ def test_clone_manager(
     restore_client: InstanceRestore = clone_state.get_restore_client(to_cluster_id=to_cluster_id, template_mode=None)
     restore_client.deploy(instance_name=to_instance_name)
     # deploy_responses[0].calls[0].request.body
-    import pdb
-
-    pdb.set_trace()
+    # import pdb
+    # pdb.set_trace()
     pass
 
 
@@ -658,8 +725,9 @@ EXPECTED_ORD_MIN_RESOURCE_MAP = {
             "dependsOn": ["instance"],
         }
     },
-    "authns": {"replacements": __replace_instance_resource},
     "listeners": {"replacements": __replace_instance_resource},
+    "authns": {"replacements": __replace_instance_resource},
+    "authzs": {"replacements": __replace_instance_resource},
     "dataflowEndpoints": {"replacements": __replace_instance_resource},
     "dataflowProfiles": {"replacements": __replace_instance_resource},
 }
@@ -797,6 +865,7 @@ class CloneAssertor:
             assert sr_ra_def["properties"]["principalType"] == "ServicePrincipal"
 
     def _assert_deployments(self, resources: dict):
+        template_fetched_keys = defaultdict(list)
         for deployment_key, resource_config_key, depends_on in self._get_deployment_key_pairs():
             deployment = resources[deployment_key]
             self._assert_deployment_generic(
@@ -817,18 +886,19 @@ class CloneAssertor:
                 }
                 deployment_resources = template["resources"]
                 deployment_resources_len = len(deployment_resources)
-                assert len(deployment_resources) == len(self.resource_configs[resource_config_key])
-                if deployment_key == "listeners_1":
-                    import pdb
 
-                    pdb.set_trace()
-                    pass
+                continue_from = len(template_fetched_keys[resource_config_key])
+
                 for i in range(deployment_resources_len):
-                    authn_config = deepcopy(self.resource_configs[resource_config_key][i])
-                    self._handle_component_conversion(authn_config, deployment_key)
-                    assert (
-                        authn_config == deployment_resources[i]
-                    ), f"{resource_config_key} resource mismatch at index {i}"
+                    template_fetched_keys[resource_config_key].append(deployment_resources[i])
+                    model_config = deepcopy(self.resource_configs[resource_config_key][continue_from + i])
+                    self._handle_component_conversion(model_config, resource_config_key)
+                    assert model_config == deployment_resources[i]
+
+        for key in template_fetched_keys:
+            assert len(template_fetched_keys[key]) == len(
+                self.resource_configs[key]
+            ), f"Mismatch in resource count for {key}"
 
     def _get_deployment_key_pairs(self) -> List[Tuple[str, str, List[str]]]:
         payload = []
@@ -841,12 +911,9 @@ class CloneAssertor:
             kind_len = len(self.resource_configs[plural])
             chunks = math.ceil(kind_len / DEPLOYMENT_CHUNK_SIZE)
             chunks_map[plural] = chunks
-            depends_on = []
-            if plural == "listeners":
-                import pdb
 
-                pdb.set_trace()
-                pass
+        for plural in PLURALS:
+            depends_on = []
             if plural in dep_map:
                 for dep in dep_map[plural]:
                     if dep in chunks_map:
@@ -868,13 +935,9 @@ class CloneAssertor:
 
     def _get_expected_resource_keys(self):
         resource_keys = []
-        enumerate_through = [*list(EXPECTED_ORD_EXT_RESOURCE_MAP.keys()), *SINGLETONS, *PLURALS]
+        enumerate_through = [*PLURALS]
 
         for r in enumerate_through:
-            if isinstance(self.resource_configs[r], dict):
-                resource_keys.append(r)
-                continue
-
             kind_len = len(self.resource_configs[r])
             if not kind_len:
                 continue
@@ -883,6 +946,8 @@ class CloneAssertor:
             for i in range(chunks):
                 paged_key = f"{r}_{i + 1}"
                 resource_keys.append(paged_key)
+
+        resource_keys = [*list(EXPECTED_ORD_EXT_RESOURCE_MAP.keys()), *SINGLETONS] + resource_keys
 
         return resource_keys
 
