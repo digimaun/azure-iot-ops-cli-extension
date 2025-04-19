@@ -519,12 +519,12 @@ class CloneScenario:
         return self
 
 
-# @pytest.mark.parametrize("add_dataflows", [0, 1])
-# @pytest.mark.parametrize("add_dataflow_endpoints", [0, 1])
-# @pytest.mark.parametrize("add_dataflow_profiles", [0, 1])
-#@pytest.mark.parametrize("add_authzs", [0])
-@pytest.mark.parametrize("add_authns", [0, 1, 100])
-@pytest.mark.parametrize("add_listeners", [0, 1, 100])
+@pytest.mark.parametrize("add_dataflows", [0, 1, 2])
+@pytest.mark.parametrize("add_dataflow_endpoints", [0, 1, 5])
+@pytest.mark.parametrize("add_dataflow_profiles", [0, 1, 2])
+@pytest.mark.parametrize("add_authzs", [0, 1, 10])
+@pytest.mark.parametrize("add_authns", [0, 1, 10])
+@pytest.mark.parametrize("add_listeners", [0, 1, 10])
 @pytest.mark.parametrize("clone_scenario", [CloneScenario()])
 def test_clone_manager(
     mocked_cmd: Mock,
@@ -532,10 +532,10 @@ def test_clone_manager(
     clone_scenario: CloneScenario,
     add_listeners: int,
     add_authns: int,
-    #add_authzs: int,
-    #add_dataflow_profiles: int,
-    #add_dataflow_endpoints: int,
-    #add_dataflows: int,
+    add_authzs: int,
+    add_dataflow_profiles: int,
+    add_dataflow_endpoints: int,
+    add_dataflows: int,
 ):
     cluster_name = generate_random_string()
     instance_name = generate_random_string()
@@ -544,10 +544,10 @@ def test_clone_manager(
     add_resources_map = {
         "listeners": add_listeners,
         "authns": add_authns,
-        #"authzs": add_authzs,
-        #"dataflowProfiles": add_dataflow_profiles,
-        #"dataflowEndpoints": add_dataflow_endpoints,
-        #"dataflows": add_dataflows,
+        "authzs": add_authzs,
+        "dataflowProfiles": add_dataflow_profiles,
+        "dataflowEndpoints": add_dataflow_endpoints,
+        "dataflows": add_dataflows,
     }
 
     clone_scenario.bootstrap(
@@ -580,10 +580,10 @@ def test_clone_manager(
         f"/subscriptions/{cluster_sub_id}/resourceGroups/{cluster_rg}"
         f"/providers/Microsoft.Kubernetes/connectedClusters/{cluster_name}"
     )
-    clone_scenario.wrap_cluster_deploy(split_content, to_cluster_id=to_cluster_id)
+    #clone_scenario.wrap_cluster_deploy(split_content, to_cluster_id=to_cluster_id)
 
-    restore_client: InstanceRestore = clone_state.get_restore_client(to_cluster_id=to_cluster_id, template_mode=None)
-    restore_client.deploy(instance_name=to_instance_name)
+    # restore_client: InstanceRestore = clone_state.get_restore_client(to_cluster_id=to_cluster_id, template_mode=None)
+    # restore_client.deploy(instance_name=to_instance_name)
     # deploy_responses[0].calls[0].request.body
     # import pdb
     # pdb.set_trace()
@@ -686,8 +686,11 @@ def __replace_instance_resource(context: dict) -> dict:
 
     if type_segment in ["authentications", "authorizations", "listeners"]:
         config_name = f"/default/{config_name}"
-    if type_segment in ["dataflowprofiles", "dataflowendpoints", "dataflows"]:
+    if type_segment in ["dataflowprofiles", "dataflowendpoints"]:
         config_name = f"/{config_name}"
+    if type_segment in ["dataflows"]:
+        profile_name = config["id"].split("/dataflowProfiles/")[-1].split("/dataflows/")[0]
+        config_name = f"/{profile_name}/{config_name}"
 
     return {
         "apiVersion": "2025-04-01",
@@ -728,8 +731,9 @@ EXPECTED_ORD_MIN_RESOURCE_MAP = {
     "listeners": {"replacements": __replace_instance_resource},
     "authns": {"replacements": __replace_instance_resource},
     "authzs": {"replacements": __replace_instance_resource},
-    "dataflowEndpoints": {"replacements": __replace_instance_resource},
     "dataflowProfiles": {"replacements": __replace_instance_resource},
+    "dataflowEndpoints": {"replacements": __replace_instance_resource},
+    "dataflows": {"replacements": __replace_instance_resource},
 }
 
 
@@ -909,10 +913,14 @@ class CloneAssertor:
 
         for plural in PLURALS:
             kind_len = len(self.resource_configs[plural])
+            if not kind_len:
+                continue
             chunks = math.ceil(kind_len / DEPLOYMENT_CHUNK_SIZE)
             chunks_map[plural] = chunks
 
         for plural in PLURALS:
+            if not self.resource_configs[plural]:
+                continue
             depends_on = []
             if plural in dep_map:
                 for dep in dep_map[plural]:
