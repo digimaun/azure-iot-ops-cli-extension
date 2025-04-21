@@ -641,7 +641,7 @@ class CloneManager:
             # disable=True,
         ) as progress:
             _ = progress.add_task(f"Analyzing {self.instance_name}...", total=None)
-            self._build_parameters(self.instance_record)
+            self._build_parameters()
             self._build_variables()
             self._build_metadata()
 
@@ -686,7 +686,7 @@ class CloneManager:
         __enumerator(self.rcontainer_map)
         return enumerated_map
 
-    def _build_parameters(self, instance: dict):
+    def _build_parameters(self):
         self.parameter_map.update(build_parameter(name=TemplateParams.CLUSTER_NAME.value))
         self.parameter_map.update(
             build_parameter(name=TemplateParams.INSTANCE_NAME.value, default=self.instance_record["name"])
@@ -811,13 +811,6 @@ class CloneManager:
             data=self.instance_record,
             depends_on=StateResourceKey.CL,
         )
-        # self._add_resource(
-        #     key=StateResourceKey.ROLE_ASSIGNMENT,
-        #     api_version="2022-04-01",
-        #     data=get_role_assignment(),
-        #     depends_on=EXTENSION_TYPE_TO_MONIKER_MAP[EXTENSION_TYPE_OPS],
-        #     config={"apply_nested_name": False},
-        # )
         nested_params = {
             **build_parameter(name=TemplateParams.CLUSTER_NAME.value),
             **build_parameter(name=TemplateParams.INSTANCE_NAME.value),

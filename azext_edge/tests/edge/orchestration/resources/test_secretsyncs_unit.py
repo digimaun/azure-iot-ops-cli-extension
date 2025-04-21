@@ -27,7 +27,12 @@ def get_secretsync_endpoint(resource_group_name: Optional[str] = None, spc_name:
     )
 
 
-def get_mock_secretsync_record(name: str, resource_group_name: str, location: Optional[str] = None) -> dict:
+def get_mock_secretsync_record(
+    name: str, resource_group_name: str, location: Optional[str] = None, cl_name: Optional[str] = None
+) -> dict:
+    optional_kwargs = {}
+    if cl_name:
+        optional_kwargs["custom_location_name"] = cl_name
     record = get_mock_resource(
         name=name,
         resource_provider=SECRETSYNC_RP,
@@ -46,5 +51,6 @@ def get_mock_secretsync_record(name: str, resource_group_name: str, location: Op
         },
         resource_group_name=resource_group_name,
         qualified_type=f"{SECRETSYNC_RP}/secretSyncs",
+        **optional_kwargs,
     )
     return record

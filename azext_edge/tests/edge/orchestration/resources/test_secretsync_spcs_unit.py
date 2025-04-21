@@ -29,7 +29,12 @@ def get_spc_endpoint(resource_group_name: Optional[str] = None, spc_name: Option
     )
 
 
-def get_mock_spc_record(name: str, resource_group_name: str, location: Optional[str] = None) -> dict:
+def get_mock_spc_record(
+    name: str, resource_group_name: str, location: Optional[str] = None, cl_name: Optional[str] = None
+) -> dict:
+    optional_kwargs = {}
+    if cl_name:
+        optional_kwargs["custom_location_name"] = cl_name
     record = get_mock_resource(
         name=name,
         resource_provider=SECRETSYNC_RP,
@@ -44,5 +49,6 @@ def get_mock_spc_record(name: str, resource_group_name: str, location: Optional[
         },
         resource_group_name=resource_group_name,
         qualified_type=f"{SECRETSYNC_RP}/azureKeyVaultSecretProviderClasses",
+        **optional_kwargs,
     )
     return record

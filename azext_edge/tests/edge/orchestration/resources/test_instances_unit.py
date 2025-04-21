@@ -51,6 +51,16 @@ def get_cl_endpoint(resource_group_name: Optional[str] = None, cl_name: Optional
     )
 
 
+def get_uami_id_map(resource_group_name: str) -> dict:
+    return {
+        f"/subscriptions/{ZEROED_SUBSCRIPTION}/resourceGroups/{resource_group_name}"
+        f"/providers/Microsoft.ManagedIdentity/userAssignedIdentities/{generate_random_string()}": {
+            "clientId": generate_random_string(),
+            "principalId": generate_random_string(),
+        }
+    }
+
+
 def get_mock_instance_record(
     name: str,
     resource_group_name: str,
@@ -60,6 +70,7 @@ def get_mock_instance_record(
     cl_name: Optional[str] = None,
     schema_registry_name: Optional[str] = None,
     version: Optional[str] = None,
+    identity_map: Optional[dict] = None,
 ) -> dict:
     properties = {
         "provisioningState": "Succeeded",
@@ -72,6 +83,11 @@ def get_mock_instance_record(
         },
         "version": version or "1.1.15",
     }
+    if identity_map:
+        properties["identity"] = {
+            "type": "UserAssigned",
+            "userAssignedIdentities": identity_map,
+        }
     if description:
         properties["description"] = description
     if features:

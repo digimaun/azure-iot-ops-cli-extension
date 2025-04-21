@@ -7,6 +7,7 @@
 import json
 import math
 import re
+from functools import partial
 from collections import defaultdict
 from copy import deepcopy
 from typing import List, Optional, Tuple, TypeVar
@@ -77,9 +78,10 @@ from .resources.test_dataflows_unit import (
 from .resources.test_instances_unit import (
     get_instance_endpoint,
     get_mock_instance_record,
+    get_uami_id_map,
 )
-from .resources.test_secretsync_spcs_unit import get_spc_endpoint
-from .resources.test_secretsyncs_unit import get_secretsync_endpoint
+from .resources.test_secretsync_spcs_unit import get_spc_endpoint, get_mock_spc_record
+from .resources.test_secretsyncs_unit import get_secretsync_endpoint, get_mock_secretsync_record
 
 ZEROED_SUBSCRIPTION = get_zeroed_subscription()
 
@@ -106,6 +108,8 @@ PLURALS = [
     "dataflows",
     "assetEndpointProfiles",
     "assets",
+    "secretProviderClasss",
+    "secretSyncs",
 ]
 SINGLETONS = ["customLocation", "instance", "roleAssignments_1", "broker"]
 
@@ -121,7 +125,6 @@ class CloneScenario:
     def __init__(self, description: str = None):
         self.description = description
         self.resource_configs = defaultdict(list)
-        self.arg_queries = {}
         self.deploy_responses = []
 
     def bootstrap(
@@ -133,7 +136,6 @@ class CloneScenario:
         add_resources_map: Optional[dict] = None,
     ):
         self.responses = mocked_responses
-        # self.responses.assert_all_requests_are_fired = False
         self.instance_name = instance_name
         self.resource_group_name = resource_group_name
         self.cluster_name = cluster_name
@@ -144,7 +146,10 @@ class CloneScenario:
         self.default_listener_name = DEFAULT_BROKER_LISTENER
         self.default_dataflow_profile_name = DEFAULT_DATAFLOW_PROFILE
         self.default_dataflow_endpoint_name = DEFAULT_DATAFLOW_ENDPOINT
+        self.arg_queries = {}
         self.add_resources_map = add_resources_map or {}
+        self.spc_client_ids = []
+        self.uami_ids = []
         self._configure_instance()
 
     def _configure_instance(self: C) -> C:
@@ -254,11 +259,23 @@ class CloneScenario:
         return self
 
     def add_instance(self: C) -> C:
+        optional_kwargs = {}
+        identity_map = {}
+
+        for i in range(self.add_resources_map.get("identities", 0)):
+            uami_map = get_uami_id_map(self.resource_group_name)
+            self.uami_ids.append(next(iter(uami_map)))
+            identity_map.update(uami_map)
+
+        if identity_map:
+            optional_kwargs["identity_map"] = identity_map
+
         mock_instance_record = get_mock_instance_record(
             name=self.instance_name,
             resource_group_name=self.resource_group_name,
             cl_name=self.cl_name,
             schema_registry_name=self.sr_name,
+            **optional_kwargs,
         )
         self.resource_configs["schemaRegistryId"] = mock_instance_record["properties"]["schemaRegistryRef"][
             "resourceId"
@@ -297,7 +314,7 @@ class CloneScenario:
             resource_group_name=self.resource_group_name,
         )
         listeners = [mock_listener_record]
-        for i in range(1, self.add_resources_map.get("listeners", 0)):
+        for i in range(self.add_resources_map.get("listeners", 0)):
             listeners.append(
                 get_mock_broker_listener_record(
                     listener_name=generate_random_string(),
@@ -330,7 +347,7 @@ class CloneScenario:
             resource_group_name=self.resource_group_name,
         )
         authns = [mock_authn_record]
-        for i in range(1, self.add_resources_map.get("authns", 0)):
+        for i in range(self.add_resources_map.get("authns", 0)):
             authns.append(
                 get_mock_broker_authn_record(
                     authn_name=generate_random_string(),
@@ -473,8 +490,14 @@ class CloneScenario:
         return self
 
     def add_secretsync_spcs(self: C) -> C:
-        payload = {"value": []}
-
+        spcs = []
+        for _ in range(self.add_resources_map.get("spcs", 0)):
+            spc = get_mock_spc_record(
+                name=generate_random_string(), resource_group_name=self.resource_group_name, cl_name=self.cl_name
+            )
+            self.spc_client_ids.append(spc["properties"]["clientId"])
+            spcs.append(spc)
+        payload = {"value": spcs}
         self.responses.add(
             method=responses.GET,
             url=get_spc_endpoint(
@@ -484,11 +507,18 @@ class CloneScenario:
             status=200,
             content_type="application/json",
         )
-        self.resource_configs["spcs"] = payload["value"]
+        self.resource_configs["secretProviderClasss"] = spcs
         return self
 
     def add_secretsyncs(self: C) -> C:
-        payload = {"value": []}
+        secretsyncs = []
+        for _ in range(self.add_resources_map.get("secretsyncs", 0)):
+            secretsyncs.append(
+                get_mock_secretsync_record(
+                    name=generate_random_string(), resource_group_name=self.resource_group_name, cl_name=self.cl_name
+                )
+            )
+        payload = {"value": secretsyncs}
 
         self.responses.add(
             method=responses.GET,
@@ -499,7 +529,7 @@ class CloneScenario:
             status=200,
             content_type="application/json",
         )
-        self.resource_configs["secretsyncs"] = payload["value"]
+        self.resource_configs["secretSyncs"] = secretsyncs
         return self
 
     def add_arg_handler(self: C) -> C:
@@ -517,8 +547,16 @@ class CloneScenario:
                 )
                 if '| where type =~ "Microsoft.ManagedIdentity/userAssignedIdentities"' in query:
                     self.arg_queries["uami"] = 1
-                    # TODO: ensure this is only run if SPC client Ids.
-                    return request_kpis.respond_with(200, response_body={"data": []})
+                    spc_uamis = []
+                    assert self.resource_configs["secretProviderClasss"]
+                    expected_client_ids = ""
+                    for client_id in self.spc_client_ids:
+                        expected_client_ids += f'"{client_id}", '
+                        uami_map = get_uami_id_map(self.resource_group_name)
+                        self.uami_ids.append(next(iter(uami_map)))
+                        spc_uamis.append({"id": uami_map})
+                    assert f"| where properties.clientId in~ ({expected_client_ids[:-2]})" in query
+                    return request_kpis.respond_with(200, response_body={"data": spc_uamis})
 
                 if "| where type =~ 'microsoft.deviceregistry/assetendpointprofiles'" in query:
                     self.arg_queries["assetEndpointProfiles"] = 1
@@ -560,41 +598,50 @@ class CloneScenario:
         return self
 
 
-@pytest.mark.parametrize("add_dataflows", [0, 2])
-@pytest.mark.parametrize("add_dataflow_endpoints", [0, 5])
-@pytest.mark.parametrize("add_dataflow_profiles", [0, 2])
-@pytest.mark.parametrize("add_authzs", [0, 5])
-@pytest.mark.parametrize("add_authns", [0, 5])
-@pytest.mark.parametrize("add_listeners", [0, 5])
-@pytest.mark.parametrize("add_aeps", [0, 5])
-@pytest.mark.parametrize("add_assets", [0, 5])
+# @pytest.mark.parametrize("add_dataflows", [0, 2])
+# @pytest.mark.parametrize("add_dataflow_endpoints", [0, 5])
+# @pytest.mark.parametrize("add_dataflow_profiles", [0, 2])
+# @pytest.mark.parametrize("add_authzs", [0, 5])
+# @pytest.mark.parametrize("add_authns", [0, 5])
+# @pytest.mark.parametrize("add_listeners", [0, 5])
+# @pytest.mark.parametrize("add_aeps", [0, 5])
+# @pytest.mark.parametrize("add_assets", [0, 5])
+@pytest.mark.parametrize("add_secretsyncs", [0, 5])
+@pytest.mark.parametrize("add_spcs", [0, 5])
+@pytest.mark.parametrize("add_identities", [0, 2])
 @pytest.mark.parametrize("clone_scenario", [CloneScenario()])
 def test_clone_manager(
     mocked_cmd: Mock,
     mocked_responses: responses,
     clone_scenario: CloneScenario,
-    add_listeners: int,
-    add_authns: int,
-    add_authzs: int,
-    add_dataflow_profiles: int,
-    add_dataflow_endpoints: int,
-    add_dataflows: int,
-    add_aeps: int,
-    add_assets: int,
+    # add_listeners: int,
+    # add_authns: int,
+    # add_authzs: int,
+    # add_dataflow_profiles: int,
+    # add_dataflow_endpoints: int,
+    # add_dataflows: int,
+    # add_aeps: int,
+    # add_assets: int,
+    add_spcs: int,
+    add_secretsyncs: int,
+    add_identities: int,
 ):
     cluster_name = generate_random_string()
     instance_name = generate_random_string()
     resource_group_name = generate_random_string()
 
     add_resources_map = {
-        "listeners": add_listeners,
-        "authns": add_authns,
-        "authzs": add_authzs,
-        "dataflowProfiles": add_dataflow_profiles,
-        "dataflowEndpoints": add_dataflow_endpoints,
-        "dataflows": add_dataflows,
-        "aeps": add_aeps,
-        "assets": add_assets,
+        # "listeners": add_listeners,
+        # "authns": add_authns,
+        # "authzs": add_authzs,
+        # "dataflowProfiles": add_dataflow_profiles,
+        # "dataflowEndpoints": add_dataflow_endpoints,
+        # "dataflows": add_dataflows,
+        # "aeps": add_aeps,
+        # "assets": add_assets,
+        "spcs": add_spcs,
+        "secretsyncs": add_secretsyncs,
+        "identities": add_identities,
     }
 
     clone_scenario.bootstrap(
@@ -749,14 +796,18 @@ def __replace_instance_resource(context: dict) -> dict:
     }
 
 
-def __replace_asset_resource(_: dict) -> dict:
+def __replace_generic_resource(_: dict, api_version: str) -> dict:
     return {
-        "apiVersion": "2024-11-01",
+        "apiVersion": api_version,
         "extendedLocation": {
             "name": "[resourceId('Microsoft.ExtendedLocation/customLocations', parameters('customLocationName'))]",
             "type": "CustomLocation",
         },
     }
+
+
+__replace_asset_resource = partial(__replace_generic_resource, api_version="2024-11-01")
+__replace_secretsync_resource = partial(__replace_generic_resource, api_version="2024-08-21-preview")
 
 
 EXPECTED_ORD_MIN_RESOURCE_MAP = {
@@ -793,6 +844,8 @@ EXPECTED_ORD_MIN_RESOURCE_MAP = {
     "dataflows": {"replacements": __replace_instance_resource},
     "assetEndpointProfiles": {"replacements": __replace_asset_resource},
     "assets": {"replacements": __replace_asset_resource},
+    "secretProviderClasss": {"replacements": __replace_secretsync_resource},
+    "secretSyncs": {"replacements": __replace_secretsync_resource},
 }
 
 
@@ -892,12 +945,22 @@ class CloneAssertor:
 
     def _assert_role_assignments(self, resources: dict):
         key = "roleAssignments_1"
+
         deployment = resources[key]
         parsed_sr_id = parse_resource_id(self.resource_configs["schemaRegistryId"])
         self._assert_deployment_generic(
             deployment, key, resource_group=parsed_sr_id["resource_group"], depends_on=["iotOperations"]
         )
         if True:  # TODO If template mode is default
+            dep_props = deployment["properties"]
+            dep_props["parameters"] = {
+                "clusterName": {"value": "[parameters('clusterName')]"},
+                "instanceName": {"value": "[parameters('instanceName')]"},
+                "principalId": {"value": "[reference('iotOperations', '2023-05-01', 'Full').identity.principalId]"},
+                "schemaRegistryId": {
+                    "value": self.resource_configs["instance"]["properties"]["schemaRegistryRef"]["resourceId"]
+                },
+            }
             template = deployment["properties"]["template"]
             assert (
                 template["$schema"]
@@ -932,8 +995,9 @@ class CloneAssertor:
         for deployment_key, resource_config_key, depends_on in self._get_deployment_key_pairs():
             deployment = resources[deployment_key]
             self._assert_deployment_generic(
-                deployment,
-                deployment_key,
+                deployment=deployment,
+                expected_name=deployment_key,
+                resource_key=resource_config_key,
                 depends_on=depends_on,
             )
             if True:  # TODO If template mode is default
@@ -944,7 +1008,12 @@ class CloneAssertor:
                 )
                 assert template["contentVersion"] == "1.0.0.0"
                 expected_parameters = {"customLocationName": {"type": "string"}}
-                if resource_config_key not in ["assetEndpointProfiles", "assets"]:
+                if resource_config_key not in [
+                    "assetEndpointProfiles",
+                    "assets",
+                    "secretProviderClasss",
+                    "secretSyncs",
+                ]:
                     expected_parameters["instanceName"] = {"type": "string"}
                 assert template["parameters"] == expected_parameters
                 deployment_resources = template["resources"]
@@ -970,6 +1039,7 @@ class CloneAssertor:
             "dataflows": ["dataflowProfiles", "dataflowEndpoints"],
             "assets": ["assetEndpointProfiles"],
             "assetEndpointProfiles": ["listeners", "instance"],
+            "secretSyncs": ["secretProviderClasss"],
         }
         chunks_map = defaultdict(dict)
 
@@ -1007,6 +1077,10 @@ class CloneAssertor:
                 if not self.resource_configs.get("assetEndpointProfiles"):
                     continue
 
+            if plural in ["secretSyncs"]:
+                if not self.resource_configs.get("secretProviderClasss"):
+                    continue
+
             for i in range(chunks):
                 paged_key = f"{plural}_{i + 1}"
                 payload.append((paged_key, plural, depends_on))
@@ -1019,6 +1093,8 @@ class CloneAssertor:
 
         for r in enumerate_through:
             if r == "assets" and not self.resource_configs.get("assetEndpointProfiles"):
+                continue
+            if r == "secretSyncs" and not self.resource_configs.get("secretProviderClasss"):
                 continue
             kind_len = len(self.resource_configs[r])
             if not kind_len:
@@ -1037,6 +1113,7 @@ class CloneAssertor:
         self,
         deployment: dict,
         expected_name: str,
+        resource_key: Optional[str] = None,
         resource_group: Optional[str] = None,
         depends_on: Optional[List[str]] = None,
     ):
@@ -1044,7 +1121,15 @@ class CloneAssertor:
         assert deployment["apiVersion"] == "2022-09-01"
         assert deployment["name"] == f"[concat(parameters('resourceSlug'), '_{expected_name}')]"
         assert deployment["properties"]["mode"] == "Incremental"
-        # assert deployment["properties"]["template"]
+
+        if resource_key:
+            expected_params = {
+                "customLocationName": {"value": "[parameters('customLocationName')]"},
+            }
+            if resource_key not in ["assetEndpointProfiles", "assets", "secretProviderClasss", "secretSyncs"]:
+                expected_params["instanceName"] = {"value": "[parameters('instanceName')]"}
+            assert deployment["properties"]["parameters"] == expected_params
+
         if resource_group:
             assert deployment["resourceGroup"] == resource_group
         if depends_on:
