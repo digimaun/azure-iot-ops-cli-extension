@@ -4,6 +4,7 @@
 # Licensed under the MIT License. See License file in the project root for license information.
 # ----------------------------------------------------------------------------------------------
 
+from copy import deepcopy
 from enum import Enum
 from json import dumps
 from pathlib import Path, PurePath
@@ -48,7 +49,11 @@ from .common import (
 )
 from .connected_cluster import ConnectedCluster
 from .resources import Instances
-from .resources.instances import get_fc_name
+from .resources.instances import (
+    SERVICE_ACCOUNT_DATAFLOW,
+    SERVICE_ACCOUNT_SECRETSYNC,
+    get_fc_name,
+)
 
 DEFAULT_CONSOLE = Console()
 
@@ -336,7 +341,8 @@ class InstanceRestore:
         self,
         cmd,
         instances: Instances,
-        from_instance_name: str,
+        instance_record: dict,
+        namespace: str,
         cluster_resource_id: str,
         template_content: "TemplateContent",
         user_assigned_mis: Optional[List[str]] = None,
@@ -346,8 +352,10 @@ class InstanceRestore:
     ):
         self.cmd = cmd
         self.instances = instances
+        self.instance_record = instance_record
+        self.namespace = namespace
         self.template_content = template_content
-        self.from_instance_name = from_instance_name
+
         self.parsed_cluster_id = parse_resource_id(cluster_resource_id)
         self.cluster_name = self.parsed_cluster_id["name"]
         self.resource_group_name = self.parsed_cluster_id["resource_group"]
@@ -359,7 +367,6 @@ class InstanceRestore:
             resource_group_name=self.resource_group_name,
         )
         self.resource_client = get_resource_client(subscription_id=self.subscription_id)
-        self.msi_client = get_msi_mgmt_client(subscription_id=self.subscription_id)
         self.template_mode = template_mode
         self.user_assigned_mis = user_assigned_mis
         self.no_progress = no_progress
@@ -381,44 +388,47 @@ class InstanceRestore:
     def _handle_federation(self, use_self_hosted_issuer: Optional[bool] = None):
         if not self.user_assigned_mis:
             return
+
         cluster_resource = self.connected_cluster.resource
         oidc_issuer = self.instances._ensure_oidc_issuer(
             cluster_resource, use_self_hosted_issuer=use_self_hosted_issuer
         )
 
-        for i in range(len(self.user_assigned_mis)):
-            resource_id = parse_resource_id(self.user_assigned_mis[i])
+        for mid in self.user_assigned_mis:
+            parsed_uami_id = parse_resource_id(mid)
+            msi_client = get_msi_mgmt_client(subscription_id=parsed_uami_id["subscription"])
             credentials = list(
-                self.msi_client.federated_identity_credentials.list(
-                    resource_group_name=resource_id["resource_group"], resource_name=resource_id["name"]
+                msi_client.federated_identity_credentials.list(
+                    resource_group_name=parsed_uami_id["resource_group"], resource_name=parsed_uami_id["name"]
                 )
             )
-            filtered_creds = []
+            cred_map = {}
+            cluster_svc_acct_map = {}
+            expected_creds = [(oidc_issuer, SERVICE_ACCOUNT_SECRETSYNC), (oidc_issuer, SERVICE_ACCOUNT_DATAFLOW)]
             for cred in credentials:
-                if cred["properties"]["issuer"] != oidc_issuer:
-                    filtered_creds.append(cred)
+                svc_acct = cred["properties"]["subject"].split(":")[-1]
+                cred_map[(cred["properties"]["issuer"], svc_acct)] = 1
+                cluster_svc_acct_map[svc_acct] = 1
 
-            for cred in filtered_creds:
-                if ":aio-" not in cred["properties"]["subject"]:
-                    continue
-
-                # TODO: Handle repeats if subject not already handled
-                self.msi_client.federated_identity_credentials.create_or_update(
-                    resource_group_name=resource_id["resource_group"],
-                    resource_name=resource_id["name"],
-                    federated_identity_credential_resource_name=get_fc_name(
-                        cluster_name=self.cluster_name,
-                        oidc_issuer=oidc_issuer,
-                        subject=cred["properties"]["subject"],
-                    ),
-                    parameters={
-                        "properties": {
-                            "subject": cred["properties"]["subject"],
-                            "audiences": cred["properties"]["audiences"],
-                            "issuer": oidc_issuer,
-                        }
-                    },
-                )
+            for exp_cred in expected_creds:
+                if exp_cred not in cred_map and exp_cred[1] in cluster_svc_acct_map:
+                    subject = f"system:serviceaccount:{self.namespace}:{exp_cred[1]}"
+                    msi_client.federated_identity_credentials.create_or_update(
+                        resource_group_name=parsed_uami_id["resource_group"],
+                        resource_name=parsed_uami_id["name"],
+                        federated_identity_credential_resource_name=get_fc_name(
+                            cluster_name=self.cluster_name,
+                            oidc_issuer=oidc_issuer,
+                            subject=subject,
+                        ),
+                        parameters={
+                            "properties": {
+                                "subject": subject,
+                                "audiences": ["api://AzureADTokenExchange"],
+                                "issuer": oidc_issuer,
+                            }
+                        },
+                    )
 
     def deploy(
         self,
@@ -430,7 +440,7 @@ class InstanceRestore:
         }
         if instance_name:
             parameters["instanceName"] = {"value": instance_name}
-        deployment_name = default_bundle_name(self.from_instance_name)
+        deployment_name = default_bundle_name(self.instance_record["name"])
 
         DEFAULT_CONSOLE.print()
 
@@ -572,15 +582,17 @@ class CloneState:
     def __init__(
         self,
         cmd,
-        instance_name: str,
+        instance_record: str,
         instances: Instances,
+        namespace: str,
         resources: dict,
         template_gen: "TemplateGen",
         user_assigned_mis: Optional[List[str]] = None,
     ):
         self.cmd = cmd
-        self.instance_name = instance_name
+        self.instance_record = instance_record
         self.instances = instances
+        self.namespace = namespace
         self.resources = resources
         self.template_gen = template_gen
         self.content = self.template_gen.get_content()
@@ -595,7 +607,8 @@ class CloneState:
         return InstanceRestore(
             cmd=self.cmd,
             instances=self.instances,
-            from_instance_name=self.instance_name,
+            instance_record=self.instance_record,
+            namespace=self.namespace,
             cluster_resource_id=to_cluster_id,
             template_content=self.content,
             user_assigned_mis=self.user_assigned_mis,
@@ -620,6 +633,7 @@ class CloneManager:
         self.instance_record = self.instances.show(
             name=self.instance_name, resource_group_name=self.resource_group_name
         )
+        self.custom_location = self.instances._get_associated_cl(self.instance_record)
 
         self.resource_map = self.instances.get_resource_map(self.instance_record)
         self.resouce_graph = self.resource_map.connected_cluster.resource_graph
@@ -654,8 +668,9 @@ class CloneManager:
 
             return CloneState(
                 cmd=self.cmd,
-                instance_name=self.instance_name,
+                instance_record=self.instance_record,
                 instances=self.instances,
+                namespace=self.custom_location["properties"]["namespace"],
                 resources=self._enumerate_resources(),
                 template_gen=TemplateGen(
                     self.rcontainer_map, self.parameter_map, self.variable_map, self.metadata_map
@@ -769,10 +784,8 @@ class CloneManager:
 
     def _analyze_instance(self):
         api_version = self.instances.iotops_mgmt_client._config.api_version
-        # TODO - @digimaun, not efficient.
-        custom_location = self.instances._get_associated_cl(self.instance_record)
+        custom_location = deepcopy(self.custom_location)
         custom_location["properties"]["hostResourceId"] = TEMPLATE_EXPRESSION_MAP["clusterId"]
-        # TODO
         custom_location["name"] = TEMPLATE_EXPRESSION_MAP["customLocationName"]
 
         cl_extension_ids = []
@@ -802,13 +815,10 @@ class CloneManager:
             config={"apply_nested_name": False},
             depends_on=cl_monikers,
         )
-        # self.instance_record["properties"]["schemaRegistryRef"]["resourceId"] = TEMPLATE_EXPRESSION_MAP[
-        #     "schemaRegistryId"
-        # ]
         self._add_resource(
             key=StateResourceKey.INSTANCE,
             api_version=api_version,
-            data=self.instance_record,
+            data=deepcopy(self.instance_record),
             depends_on=StateResourceKey.CL,
         )
         nested_params = {

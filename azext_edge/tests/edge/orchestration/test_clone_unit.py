@@ -7,9 +7,9 @@
 import json
 import math
 import re
-from functools import partial
 from collections import defaultdict
 from copy import deepcopy
+from functools import partial
 from typing import List, Optional, Tuple, TypeVar
 from unittest.mock import Mock
 
@@ -27,9 +27,12 @@ from azext_edge.edge.common import (
 )
 from azext_edge.edge.providers.orchestration.clone import (
     DEPLOYMENT_CHUNK_LEN,
+    SERVICE_ACCOUNT_DATAFLOW,
+    SERVICE_ACCOUNT_SECRETSYNC,
     CloneManager,
     InstanceRestore,
     default_bundle_name,
+    get_fc_name,
 )
 from azext_edge.edge.providers.orchestration.common import (
     EXTENSION_TYPE_ACS,
@@ -39,7 +42,7 @@ from azext_edge.edge.providers.orchestration.common import (
 )
 from azext_edge.edge.util.id_tools import parse_resource_id
 
-from ...generators import generate_random_string, get_zeroed_subscription, generate_uuid
+from ...generators import generate_random_string, generate_uuid, get_zeroed_subscription
 from .resources.conftest import BASE_URL, get_request_kpis
 from .resources.test_aeps_unit import get_mock_aep_record
 from .resources.test_assets_unit import get_mock_asset_record
@@ -80,8 +83,11 @@ from .resources.test_instances_unit import (
     get_mock_instance_record,
     get_uami_id_map,
 )
-from .resources.test_secretsync_spcs_unit import get_spc_endpoint, get_mock_spc_record
-from .resources.test_secretsyncs_unit import get_secretsync_endpoint, get_mock_secretsync_record
+from .resources.test_secretsync_spcs_unit import get_mock_spc_record, get_spc_endpoint
+from .resources.test_secretsyncs_unit import (
+    get_mock_secretsync_record,
+    get_secretsync_endpoint,
+)
 
 ZEROED_SUBSCRIPTION = get_zeroed_subscription()
 
@@ -126,6 +132,15 @@ def get_cluster_url(cluster_sub_id: str, cluster_rg: str, cluster_name: str) -> 
     return (
         f"{BASE_URL}/subscriptions/{cluster_sub_id}/resourcegroups/{cluster_rg}"
         f"/providers/Microsoft.Kubernetes/connectedClusters/{cluster_name}?api-version=2024-07-15-preview"
+    )
+
+
+def get_federated_creds_url(uami_sub_id: str, uami_rg_name: str, uami_name: str, fc_name: Optional[str] = None) -> str:
+    fc_name = f"/{fc_name}" if fc_name else ""
+    return (
+        f"{BASE_URL}/subscriptions/{uami_sub_id}/resourceGroups/{uami_rg_name}"
+        f"/providers/Microsoft.ManagedIdentity/userAssignedIdentities/{uami_name}"
+        f"/federatedIdentityCredentials{fc_name}?api-version=2023-01-31"
     )
 
 
@@ -205,6 +220,54 @@ class CloneScenario:
                 json=cluster_payload,
                 status=200,
             )
+            for uami_id in self.uami_ids:
+                parsed_uami_id = parse_resource_id(uami_id)
+                cred_url = get_federated_creds_url(
+                    uami_sub_id=parsed_uami_id["subscription"],
+                    uami_rg_name=parsed_uami_id["resource_group"],
+                    uami_name=parsed_uami_id["name"],
+                )
+                self.responses.add(
+                    method=responses.GET,
+                    url=cred_url,
+                    json={
+                        "value": [
+                            {
+                                "properties": {
+                                    "issuer": f"https://oidcdiscovery-northamerica-endpoint-abcde.z01.azurefd.net/{generate_uuid()}/",
+                                    "subject": f"system:serviceaccount:azure-iot-operations:{SERVICE_ACCOUNT_DATAFLOW}",
+                                    "audiences": ["api://AzureADTokenExchange"],
+                                },
+                            },
+                            {
+                                "properties": {
+                                    "issuer": f"https://oidcdiscovery-northamerica-endpoint-abcde.z01.azurefd.net/{generate_uuid()}/",
+                                    "subject": f"system:serviceaccount:azure-iot-operations:{SERVICE_ACCOUNT_SECRETSYNC}",
+                                    "audiences": ["api://AzureADTokenExchange"],
+                                },
+                            },
+                        ]
+                    },
+                    status=200,
+                )
+
+                for subject in [
+                    f"system:serviceaccount:azure-iot-operations:{SERVICE_ACCOUNT_DATAFLOW}",
+                    f"system:serviceaccount:azure-iot-operations:{SERVICE_ACCOUNT_SECRETSYNC}",
+                ]:
+                    fc_name = get_fc_name(cluster_name=cluster_name, oidc_issuer=system_issuer, subject=subject)
+                    cred_url = get_federated_creds_url(
+                        uami_sub_id=parsed_uami_id["subscription"],
+                        uami_rg_name=parsed_uami_id["resource_group"],
+                        uami_name=parsed_uami_id["name"],
+                        fc_name=fc_name,
+                    )
+                    self.responses.add(
+                        method=responses.PUT,
+                        url=cred_url,
+                        json={},
+                        status=200,
+                    )
 
         deployment_name = default_bundle_name(self.instance_name)
         for i in range(len(split_content)):
@@ -692,11 +755,6 @@ def test_clone_manager(
     content = template_content.content
 
     CloneAssertor(clone_scenario).assert_content(content)
-
-    # split_content = template_content.get_split_content()
-
-    # template_content.write()
-    # template_content._get_deployments()
 
     cluster_sub_id = generate_uuid()
     cluster_rg = generate_random_string()

@@ -1056,38 +1056,29 @@ def load_iotops_arguments(self, _):
             "template_mode",
             options_list=["--mode"],
             arg_type=get_enum_type(TemplateMode, default=TemplateMode.NESTED.value),
-            help="Applicable if --to-dir is selected.",
+            help="When mode 'nested' is used sub-deployments will be self-contained in the root deployment. "
+            "When mode 'linked' is used asset related sub-deployments will be split and stored as separate files "
+            "linked by the root deployment.",
             arg_group="Local Target",
         )
         context.argument(
             "linked_base_uri",
             options_list=["--base-uri"],
-            help="Base URI to use for template links. If not provided a relative path strategy will be used.",
+            help="Base URI to use for template links. If not provided a relative path strategy will be used. "
+            "Relevant when --mode is set to 'linked'.",
             arg_group="Local Target",
+        )
+        context.argument(
+            "to_cluster_id",
+            options_list=["--to-cluster-id"],
+            help="The resource Id of the connected cluster the clone will be applied to.",
+            arg_group="Cluster Target",
         )
         context.argument(
             "to_instance_name",
             options_list=["--to-instance"],
             help="The instance name that will be used when applying the clone. If omitted the "
             "clone instance name will be used.",
-            arg_group="Cluster Target",
-        )
-        context.argument(
-            "to_cluster_name",
-            options_list=["--to-cluster"],
-            help="The cluster the clone will be applied to.",
-            arg_group="Cluster Target",
-        )
-        context.argument(
-            "to_resource_group_name",
-            options_list=["--to-group"],
-            help="The cluster resource group the clone will be applied to.",
-            arg_group="Cluster Target",
-        )
-        context.argument(
-            "to_cluster_id",
-            options_list=["--to-cluster-id"],
-            help="The resource Id of the connected cluster the clone will be applied to.",
             arg_group="Cluster Target",
         )
         context.argument(
