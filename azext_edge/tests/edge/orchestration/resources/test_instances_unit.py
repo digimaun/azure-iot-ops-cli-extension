@@ -83,11 +83,6 @@ def get_mock_instance_record(
         },
         "version": version or "1.1.15",
     }
-    if identity_map:
-        properties["identity"] = {
-            "type": "UserAssigned",
-            "userAssignedIdentities": identity_map,
-        }
     if description:
         properties["description"] = description
     if features:
@@ -96,6 +91,12 @@ def get_mock_instance_record(
     kwargs = {}
     if cl_name:
         kwargs["custom_location_name"] = cl_name
+    if identity_map:
+        kwargs["identity"] = {
+            "type": "UserAssigned",
+            "userAssignedIdentities": identity_map,
+        }
+
     return get_mock_resource(
         name=name,
         resource_path=f"/instances/{name}",

@@ -148,7 +148,6 @@ class CloneScenario:
     def __init__(self, description: str = None):
         self.description = description
         self.resource_configs = defaultdict(list)
-        self.deploy_responses = []
 
     def bootstrap(
         self: C,
@@ -191,7 +190,9 @@ class CloneScenario:
         self.add_secretsyncs()
         return self
 
-    def wrap_cluster_deploy(self: C, split_content: List[dict], to_cluster_id: Optional[str] = None) -> C:
+    def wrap_cluster_deploy(
+        self: C, split_content: List[dict], to_cluster_id: Optional[str] = None
+    ) -> List[responses.BaseResponse]:
         if not to_cluster_id:
             return
 
@@ -269,6 +270,7 @@ class CloneScenario:
                         status=200,
                     )
 
+        deploy_responses = []
         deployment_name = default_bundle_name(self.instance_name)
         for i in range(len(split_content)):
             r = self.responses.add(
@@ -283,10 +285,10 @@ class CloneScenario:
                 status=200,
                 content_type="application/json",
             )
-            self.deploy_responses.append(r)
-        return self
+            deploy_responses.append(r)
+        return deploy_responses
 
-    def add_extensions(self: C) -> C:
+    def add_extensions(self: C):
         extensions_endpoint = (
             f"{BASE_URL}/subscriptions/{ZEROED_SUBSCRIPTION}/resourceGroups/{self.resource_group_name}"
             f"/providers/Microsoft.Kubernetes/connectedClusters/{self.cluster_name}/providers"
@@ -307,7 +309,6 @@ class CloneScenario:
             content_type="application/json",
         )
         self.resource_configs["extensions"] = extensions
-        return self
 
     def _create_extension(self, ext_type: str, ext_name: str, version: str, train: str) -> dict:
         ext = {
@@ -336,7 +337,7 @@ class CloneScenario:
 
         return ext
 
-    def add_custom_location(self: C) -> C:
+    def add_custom_location(self: C):
         mock_cl_record = get_mock_custom_location_record(
             name=self.cl_name, resource_group_name=self.resource_group_name, cluster_name=self.cluster_name
         )
@@ -350,9 +351,8 @@ class CloneScenario:
             content_type="application/json",
         )
         self.resource_configs["customLocation"] = mock_cl_record
-        return self
 
-    def add_instance(self: C) -> C:
+    def add_instance(self: C):
         optional_kwargs = {}
         identity_map = {}
 
@@ -382,9 +382,8 @@ class CloneScenario:
             content_type="application/json",
         )
         self.resource_configs["instance"] = mock_instance_record
-        return self
 
-    def add_broker(self: C) -> C:
+    def add_broker(self: C):
         mock_broker_record = get_mock_broker_record(
             broker_name=self.default_broker_name,
             instance_name=self.instance_name,
@@ -398,9 +397,8 @@ class CloneScenario:
             content_type="application/json",
         )
         self.resource_configs["broker"] = mock_broker_record
-        return self
 
-    def add_listeners(self: C) -> C:
+    def add_listeners(self: C):
         mock_listener_record = get_mock_broker_listener_record(
             listener_name=self.default_listener_name,
             broker_name=self.default_broker_name,
@@ -431,9 +429,8 @@ class CloneScenario:
             content_type="application/json",
         )
         self.resource_configs["listeners"] = listeners
-        return self
 
-    def add_authns(self: C) -> C:
+    def add_authns(self: C):
         mock_authn_record = get_mock_broker_authn_record(
             authn_name=self.default_authn_name,
             broker_name=self.default_broker_name,
@@ -464,9 +461,8 @@ class CloneScenario:
             content_type="application/json",
         )
         self.resource_configs["authns"] = authns
-        return self
 
-    def add_authzs(self: C) -> C:
+    def add_authzs(self: C):
         authzs = []
         for i in range(self.add_resources_map.get("authzs", 0)):
             authzs.append(
@@ -491,9 +487,8 @@ class CloneScenario:
             content_type="application/json",
         )
         self.resource_configs["authzs"] = payload["value"]
-        return self
 
-    def add_dataflow_profiles(self: C) -> C:
+    def add_dataflow_profiles(self: C):
         mock_dataflow_profile_record = get_mock_dataflow_profile_record(
             profile_name=self.default_dataflow_profile_name,
             instance_name=self.instance_name,
@@ -521,9 +516,8 @@ class CloneScenario:
             content_type="application/json",
         )
         self.resource_configs["dataflowProfiles"] = profiles
-        return self
 
-    def add_dataflow_endpoints(self: C) -> C:
+    def add_dataflow_endpoints(self: C):
         mock_dataflow_endpoint_record = get_mock_dataflow_endpoint_record(
             dataflow_endpoint_name=self.default_dataflow_endpoint_name,
             instance_name=self.instance_name,
@@ -551,9 +545,8 @@ class CloneScenario:
             content_type="application/json",
         )
         self.resource_configs["dataflowEndpoints"] = endpoints
-        return self
 
-    def add_dataflows(self: C) -> C:
+    def add_dataflows(self: C):
         dataflows = []
         for profile in self.resource_configs["dataflowProfiles"]:
             per_profile = []
@@ -581,9 +574,8 @@ class CloneScenario:
             dataflows.extend(per_profile)
 
         self.resource_configs["dataflows"] = dataflows
-        return self
 
-    def add_secretsync_spcs(self: C) -> C:
+    def add_secretsync_spcs(self: C):
         spcs = []
         for _ in range(self.add_resources_map.get("spcs", 0)):
             spc = get_mock_spc_record(
@@ -602,9 +594,8 @@ class CloneScenario:
             content_type="application/json",
         )
         self.resource_configs["secretProviderClasss"] = spcs
-        return self
 
-    def add_secretsyncs(self: C) -> C:
+    def add_secretsyncs(self: C):
         secretsyncs = []
         for _ in range(self.add_resources_map.get("secretsyncs", 0)):
             secretsyncs.append(
@@ -624,9 +615,8 @@ class CloneScenario:
             content_type="application/json",
         )
         self.resource_configs["secretSyncs"] = secretsyncs
-        return self
 
-    def add_arg_handler(self: C) -> C:
+    def add_arg_handler(self: C):
         def _handle_requests(request: requests.PreparedRequest) -> Optional[tuple]:
             request_kpis = get_request_kpis(request)
             if request_kpis.body_str:
@@ -690,7 +680,6 @@ class CloneScenario:
             ),
             callback=_handle_requests,
         )
-        return self
 
 
 @pytest.mark.parametrize("add_dataflows", [0, 2])
@@ -724,7 +713,6 @@ def test_clone_manager(
     cluster_name = generate_random_string()
     instance_name = generate_random_string()
     resource_group_name = generate_random_string()
-
     add_resources_map = {
         "listeners": add_listeners,
         "authns": add_authns,
@@ -764,11 +752,11 @@ def test_clone_manager(
         f"/subscriptions/{cluster_sub_id}/resourceGroups/{cluster_rg}"
         f"/providers/Microsoft.Kubernetes/connectedClusters/{cluster_name}"
     )
-    clone_scenario.wrap_cluster_deploy([content], to_cluster_id=to_cluster_id)
+    deploy_responses = clone_scenario.wrap_cluster_deploy([content], to_cluster_id=to_cluster_id)
 
     restore_client: InstanceRestore = clone_state.get_restore_client(to_cluster_id=to_cluster_id)
     restore_client.deploy(instance_name=to_instance_name)
-    deploy_body_payload = json.loads(clone_scenario.deploy_responses[0].calls[0].request.body)
+    deploy_body_payload = json.loads(deploy_responses[0].calls[0].request.body)
 
     assert deploy_body_payload["properties"]["mode"] == "Incremental"
     assert deploy_body_payload["properties"]["parameters"] == {

@@ -8,18 +8,15 @@ from copy import deepcopy
 from enum import Enum
 from json import dumps
 from pathlib import Path, PurePath
-from typing import TYPE_CHECKING, Any, Dict, Iterable, List, Optional, Set, Tuple, Union
-from uuid import uuid4
+from typing import TYPE_CHECKING, Any, Dict, Iterable, List, Optional, Tuple, Union
 
 from azure.cli.core.azclierror import AzureResponseError, ValidationError
 from knack.log import get_logger
 from packaging import version
 from rich.console import Console
 from rich.progress import (
-    BarColumn,
     Progress,
     SpinnerColumn,
-    TextColumn,
     TimeElapsedColumn,
 )
 from rich.table import Table, box
@@ -27,7 +24,6 @@ from rich.table import Table, box
 from ....constants import VERSION as CLI_VERSION
 from ...util import (
     chunk_list,
-    get_timestamp_now_utc,
     should_continue_prompt,
     to_safe_filename,
 )
@@ -55,14 +51,18 @@ from .resources.instances import (
     get_fc_name,
 )
 
-DEFAULT_CONSOLE = Console()
-
 if TYPE_CHECKING:
     from azure.core.polling import LROPoller
 
 
+DEFAULT_CONSOLE = Console()
+
+
 DEPLOYMENT_CHUNK_LEN = 800
 DEPLOYMENT_DATA_SIZE_KB = 1024
+
+
+logger = get_logger(__name__)
 
 
 class SummaryMode(Enum):
@@ -452,7 +452,6 @@ class InstanceRestore:
         total_pages = len(deployment_work)
 
         with DEFAULT_CONSOLE.status("Preparing replication...") as console:
-            # TODO
             self._handle_federation(use_self_hosted_issuer)
 
             for i in range(total_pages):
@@ -1271,6 +1270,7 @@ def process_depends_on(
     return result
 
 
+# TODO: Re-use?
 def get_bundle_path(instance_name: str, bundle_dir: Optional[str] = None) -> Optional[PurePath]:
     from ...util import normalize_dir
 
@@ -1283,8 +1283,7 @@ def get_bundle_path(instance_name: str, bundle_dir: Optional[str] = None) -> Opt
 
 
 def default_bundle_name(instance_name: str) -> str:
-    timestamp = get_timestamp_now_utc(format="%Y%m%dT%H%M%S")
-    name = f"clone_{to_safe_filename(instance_name)}_{timestamp}_aio"
+    name = f"clone_{to_safe_filename(instance_name)}_aio"
     return name
 
 
