@@ -56,7 +56,8 @@ if TYPE_CHECKING:
     from azure.core.polling import LROPoller
 
 
-DEPLOYMENT_CHUNK_SIZE = 750
+DEPLOYMENT_CHUNK_LEN = 800
+DEPLOYMENT_DATA_SIZE_KB = 1024
 
 
 class SummaryMode(Enum):
@@ -483,7 +484,7 @@ def clone_instance(
     linked_base_uri: Optional[str] = None,
     no_progress: Optional[bool] = None,
     confirm_yes: Optional[bool] = None,
-    **kwargs,
+    **_,
 ):
     clone_manager = CloneManager(
         cmd=cmd,
@@ -589,7 +590,7 @@ class CloneState:
         return self.content
 
     def get_restore_client(
-        self, to_cluster_id: str, template_mode: str, no_progress: Optional[bool] = None
+        self, to_cluster_id: str, template_mode: Optional[str] = None, no_progress: Optional[bool] = None
     ) -> "InstanceRestore":
         return InstanceRestore(
             cmd=self.cmd,
@@ -628,7 +629,6 @@ class CloneManager:
         self.metadata_map: dict = {}
         self.instance_identities: List[str] = []
         self.active_deployment: Dict[StateResourceKey, List[str]] = {}
-        self.chunk_size = 800
 
     def analyze_cluster(self) -> "CloneState":
         with Progress(
@@ -1067,7 +1067,9 @@ class CloneManager:
     ):
         data_iter = list(data_iter)
         if data_iter:
-            chunked_list_data = chunk_list(data_iter, self.chunk_size, DEPLOYMENT_CHUNK_SIZE)
+            chunked_list_data = chunk_list(
+                data=data_iter, chunk_len=DEPLOYMENT_CHUNK_LEN, data_size=DEPLOYMENT_DATA_SIZE_KB
+            )
 
             for chunk in chunked_list_data:
                 symbolic_name, deployment_name = self.add_deployment_by_key(key)

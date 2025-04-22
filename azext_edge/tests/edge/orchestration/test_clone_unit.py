@@ -26,7 +26,7 @@ from azext_edge.edge.common import (
     DEFAULT_DATAFLOW_PROFILE,
 )
 from azext_edge.edge.providers.orchestration.clone import (
-    DEPLOYMENT_CHUNK_SIZE,
+    DEPLOYMENT_CHUNK_LEN,
     CloneManager,
     InstanceRestore,
     default_bundle_name,
@@ -39,7 +39,7 @@ from azext_edge.edge.providers.orchestration.common import (
 )
 from azext_edge.edge.util.id_tools import parse_resource_id
 
-from ...generators import generate_random_string, get_zeroed_subscription
+from ...generators import generate_random_string, get_zeroed_subscription, generate_uuid
 from .resources.conftest import BASE_URL, get_request_kpis
 from .resources.test_aeps_unit import get_mock_aep_record
 from .resources.test_assets_unit import get_mock_asset_record
@@ -106,10 +106,10 @@ PLURALS = [
     "dataflowEndpoints",
     "dataflowProfiles",
     "dataflows",
-    "assetEndpointProfiles",
-    "assets",
     "secretProviderClasss",
     "secretSyncs",
+    "assetEndpointProfiles",
+    "assets",
 ]
 SINGLETONS = ["customLocation", "instance", "roleAssignments_1", "broker"]
 
@@ -118,6 +118,14 @@ def get_deploy_url(cluster_sub_id: str, cluster_rg: str, deployment_name: str, p
     return (
         f"{BASE_URL}/subscriptions/{cluster_sub_id}/resourcegroups/{cluster_rg}/providers"
         f"/Microsoft.Resources/deployments/{deployment_name}_{page_num}?api-version=2024-03-01"
+    )
+
+
+def get_cluster_url(cluster_sub_id: str, cluster_rg: str, cluster_name: str) -> str:
+    # client uses lowercase resourcegroups
+    return (
+        f"{BASE_URL}/subscriptions/{cluster_sub_id}/resourcegroups/{cluster_rg}"
+        f"/providers/Microsoft.Kubernetes/connectedClusters/{cluster_name}?api-version=2024-07-15-preview"
     )
 
 
@@ -172,8 +180,31 @@ class CloneScenario:
         if not to_cluster_id:
             return
 
-        cluster_sub_id = parse_resource_id(to_cluster_id)["subscription"]
-        cluster_rg = parse_resource_id(to_cluster_id)["resource_group"]
+        parsed_id = parse_resource_id(to_cluster_id)
+        cluster_sub_id = parsed_id["subscription"]
+        cluster_rg = parsed_id["resource_group"]
+        cluster_name = parsed_id["name"]
+
+        system_issuer = f"https://northamerica.oic.prod-arc.azure.com/{generate_uuid()}/{generate_uuid()}/"
+        cluster_payload = {
+            "id": to_cluster_id,
+            "name": cluster_name,
+            "properties": {
+                "securityProfile": {"workloadIdentity": {"enabled": True}},
+                "oidcIssuerProfile": {
+                    "enabled": True,
+                    "issuerUrl": system_issuer,
+                },
+            },
+        }
+
+        if self.uami_ids:
+            self.responses.add(
+                method=responses.GET,
+                url=get_cluster_url(cluster_sub_id=cluster_sub_id, cluster_rg=cluster_rg, cluster_name=cluster_name),
+                json=cluster_payload,
+                status=200,
+            )
 
         deployment_name = default_bundle_name(self.instance_name)
         for i in range(len(split_content)):
@@ -553,8 +584,9 @@ class CloneScenario:
                     for client_id in self.spc_client_ids:
                         expected_client_ids += f'"{client_id}", '
                         uami_map = get_uami_id_map(self.resource_group_name)
-                        self.uami_ids.append(next(iter(uami_map)))
-                        spc_uamis.append({"id": uami_map})
+                        uami_id = next(iter(uami_map))
+                        self.uami_ids.append(uami_id)
+                        spc_uamis.append({"id": uami_id})
                     assert f"| where properties.clientId in~ ({expected_client_ids[:-2]})" in query
                     return request_kpis.respond_with(200, response_body={"data": spc_uamis})
 
@@ -598,30 +630,30 @@ class CloneScenario:
         return self
 
 
-# @pytest.mark.parametrize("add_dataflows", [0, 2])
-# @pytest.mark.parametrize("add_dataflow_endpoints", [0, 5])
-# @pytest.mark.parametrize("add_dataflow_profiles", [0, 2])
-# @pytest.mark.parametrize("add_authzs", [0, 5])
-# @pytest.mark.parametrize("add_authns", [0, 5])
-# @pytest.mark.parametrize("add_listeners", [0, 5])
-# @pytest.mark.parametrize("add_aeps", [0, 5])
-# @pytest.mark.parametrize("add_assets", [0, 5])
+@pytest.mark.parametrize("add_dataflows", [0, 2])
+@pytest.mark.parametrize("add_dataflow_endpoints", [0, 5])
+@pytest.mark.parametrize("add_dataflow_profiles", [0, 2])
+@pytest.mark.parametrize("add_authzs", [0, 5])
+@pytest.mark.parametrize("add_authns", [0, 5])
+@pytest.mark.parametrize("add_listeners", [0, 5])
+@pytest.mark.parametrize("add_aeps", [0, 5])
+@pytest.mark.parametrize("add_assets", [0, 5])
 @pytest.mark.parametrize("add_secretsyncs", [0, 5])
-@pytest.mark.parametrize("add_spcs", [0, 5])
+@pytest.mark.parametrize("add_spcs", [0, 2])
 @pytest.mark.parametrize("add_identities", [0, 2])
 @pytest.mark.parametrize("clone_scenario", [CloneScenario()])
 def test_clone_manager(
     mocked_cmd: Mock,
     mocked_responses: responses,
     clone_scenario: CloneScenario,
-    # add_listeners: int,
-    # add_authns: int,
-    # add_authzs: int,
-    # add_dataflow_profiles: int,
-    # add_dataflow_endpoints: int,
-    # add_dataflows: int,
-    # add_aeps: int,
-    # add_assets: int,
+    add_listeners: int,
+    add_authns: int,
+    add_authzs: int,
+    add_dataflow_profiles: int,
+    add_dataflow_endpoints: int,
+    add_dataflows: int,
+    add_aeps: int,
+    add_assets: int,
     add_spcs: int,
     add_secretsyncs: int,
     add_identities: int,
@@ -631,14 +663,14 @@ def test_clone_manager(
     resource_group_name = generate_random_string()
 
     add_resources_map = {
-        # "listeners": add_listeners,
-        # "authns": add_authns,
-        # "authzs": add_authzs,
-        # "dataflowProfiles": add_dataflow_profiles,
-        # "dataflowEndpoints": add_dataflow_endpoints,
-        # "dataflows": add_dataflows,
-        # "aeps": add_aeps,
-        # "assets": add_assets,
+        "listeners": add_listeners,
+        "authns": add_authns,
+        "authzs": add_authzs,
+        "dataflowProfiles": add_dataflow_profiles,
+        "dataflowEndpoints": add_dataflow_endpoints,
+        "dataflows": add_dataflows,
+        "aeps": add_aeps,
+        "assets": add_assets,
         "spcs": add_spcs,
         "secretsyncs": add_secretsyncs,
         "identities": add_identities,
@@ -661,12 +693,12 @@ def test_clone_manager(
 
     CloneAssertor(clone_scenario).assert_content(content)
 
-    split_content = template_content.get_split_content()
+    # split_content = template_content.get_split_content()
 
     # template_content.write()
     # template_content._get_deployments()
 
-    cluster_sub_id = generate_random_string()
+    cluster_sub_id = generate_uuid()
     cluster_rg = generate_random_string()
     cluster_name = generate_random_string()
     to_instance_name = generate_random_string()
@@ -674,14 +706,17 @@ def test_clone_manager(
         f"/subscriptions/{cluster_sub_id}/resourceGroups/{cluster_rg}"
         f"/providers/Microsoft.Kubernetes/connectedClusters/{cluster_name}"
     )
-    # clone_scenario.wrap_cluster_deploy(split_content, to_cluster_id=to_cluster_id)
+    clone_scenario.wrap_cluster_deploy([content], to_cluster_id=to_cluster_id)
 
-    # restore_client: InstanceRestore = clone_state.get_restore_client(to_cluster_id=to_cluster_id, template_mode=None)
-    # restore_client.deploy(instance_name=to_instance_name)
-    # deploy_responses[0].calls[0].request.body
-    # import pdb
-    # pdb.set_trace()
-    pass
+    restore_client: InstanceRestore = clone_state.get_restore_client(to_cluster_id=to_cluster_id)
+    restore_client.deploy(instance_name=to_instance_name)
+    deploy_body_payload = json.loads(clone_scenario.deploy_responses[0].calls[0].request.body)
+
+    assert deploy_body_payload["properties"]["mode"] == "Incremental"
+    assert deploy_body_payload["properties"]["parameters"] == {
+        "clusterName": {"value": cluster_name},
+        "instanceName": {"value": to_instance_name},
+    }
 
 
 EXPECTED_TEMPLATE_KEYS = {
@@ -901,7 +936,6 @@ class CloneAssertor:
         assert content["resources"], "Resources dict should not be empty"
         resource_keys = list(content["resources"].keys())
         expected_resource_keys = self._get_expected_resource_keys()
-
         for i in range(len(expected_resource_keys)):
             assert (
                 resource_keys[i] == expected_resource_keys[i]
@@ -1049,7 +1083,7 @@ class CloneAssertor:
             kind_len = len(self.resource_configs[plural])
             if not kind_len:
                 continue
-            chunks = math.ceil(kind_len / DEPLOYMENT_CHUNK_SIZE)
+            chunks = math.ceil(kind_len / DEPLOYMENT_CHUNK_LEN)
             chunks_map[plural] = chunks
 
         for plural in PLURALS:
@@ -1099,7 +1133,7 @@ class CloneAssertor:
             kind_len = len(self.resource_configs[r])
             if not kind_len:
                 continue
-            chunks = math.ceil(kind_len / DEPLOYMENT_CHUNK_SIZE)
+            chunks = math.ceil(kind_len / DEPLOYMENT_CHUNK_LEN)
 
             for i in range(chunks):
                 paged_key = f"{r}_{i + 1}"
