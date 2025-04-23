@@ -10,7 +10,7 @@ from json import dumps
 from pathlib import Path, PurePath
 from typing import TYPE_CHECKING, Any, Dict, Iterable, List, Optional, Tuple, Union
 
-from azure.cli.core.azclierror import AzureResponseError, ValidationError
+from azure.cli.core.azclierror import ValidationError
 from knack.log import get_logger
 from rich.console import Console
 from rich.progress import (
@@ -32,7 +32,7 @@ from ...util.az_client import (
     get_resource_client,
     wait_for_terminal_state,
 )
-from ...util.id_tools import parse_resource_id
+from ...util.id_tools import parse_resource_id, is_valid_resource_id
 from .common import (
     CONTRIBUTOR_ROLE_ID,
     CUSTOM_LOCATIONS_API_VERSION,
@@ -345,7 +345,7 @@ class InstanceRestore:
         instances: Instances,
         instance_record: dict,
         namespace: str,
-        cluster_resource_id: str,
+        parsed_cluster_id: Dict[str, str],
         template_content: "TemplateContent",
         user_assigned_mis: Optional[List[str]] = None,
         # TODO eliminate mode, only use split_content
@@ -358,7 +358,7 @@ class InstanceRestore:
         self.namespace = namespace
         self.template_content = template_content
 
-        self.parsed_cluster_id = parse_resource_id(cluster_resource_id)
+        self.parsed_cluster_id = parsed_cluster_id
         self.cluster_name = self.parsed_cluster_id["name"]
         self.resource_group_name = self.parsed_cluster_id["resource_group"]
         self.subscription_id = self.parsed_cluster_id["subscription"]
@@ -437,6 +437,9 @@ class InstanceRestore:
         instance_name: Optional[str] = None,
         use_self_hosted_issuer: Optional[bool] = None,
     ):
+        if not self.connected_cluster.connected:
+            raise ValidationError(f"Cluster {self.connected_cluster.cluster_name} is not connected to Azure.")
+
         parameters = {
             "clusterName": {"value": self.cluster_name},
         }
@@ -498,6 +501,12 @@ def clone_instance(
     force: Optional[bool] = None,
     **_,
 ):
+    parsed_cluster_id = {}
+    if to_cluster_id:
+        if not is_valid_resource_id(to_cluster_id):
+            raise ValidationError(f"Invalid resource Id: {to_cluster_id}")
+        parsed_cluster_id = parse_resource_id(to_cluster_id)
+
     clone_manager = CloneManager(
         cmd=cmd,
         instance_name=instance_name,
@@ -510,10 +519,13 @@ def clone_instance(
 
     if not no_progress:
         render_upgrade_table(
-            clone_state, bundle_path, to_cluster_id, detailed=summary_mode == SummaryMode.DETAILED.value
+            clone_state=clone_state,
+            bundle_path=bundle_path,
+            parsed_cluster_id=parsed_cluster_id,
+            detailed=summary_mode == SummaryMode.DETAILED.value,
         )
 
-    if all([not to_dir, not to_cluster_id]):
+    if all([not to_dir, not parsed_cluster_id]):
         return
 
     should_bail = not should_continue_prompt(confirm_yes=confirm_yes, context="Clone")
@@ -523,9 +535,9 @@ def clone_instance(
     template_content = clone_state.get_content()
     template_content.write(bundle_path, template_mode=template_mode, linked_base_uri=linked_base_uri)
 
-    if to_cluster_id:
+    if parsed_cluster_id:
         restore_client = clone_state.get_restore_client(
-            to_cluster_id=to_cluster_id, template_mode=template_mode, no_progress=no_progress
+            parsed_cluster_id=parsed_cluster_id, template_mode=template_mode, no_progress=no_progress
         )
         restore_client.deploy(instance_name=to_instance_name, use_self_hosted_issuer=use_self_hosted_issuer)
 
@@ -533,7 +545,7 @@ def clone_instance(
 def render_upgrade_table(
     clone_state: "CloneState",
     bundle_path: Optional[PurePath] = None,
-    to_cluster_id: Optional[str] = None,
+    parsed_cluster_id: Optional[Dict[str, str]] = None,
     detailed: bool = False,
 ):
     table = get_default_table(include_name=detailed)
@@ -551,19 +563,18 @@ def render_upgrade_table(
 
     if bundle_path:
         DEFAULT_CONSOLE.print(f"State will be saved to:\n-> {bundle_path}\n")
-        if clone_state.user_assigned_mis and not to_cluster_id:
+        if clone_state.user_assigned_mis and not parsed_cluster_id:
             DEFAULT_CONSOLE.print(
                 ":exclamation: Credential federation of user-assigned managed "
                 "identity is currently only supported using --to-cluster-id"
             )
 
-    if to_cluster_id:
-        parsed_to_cluster_id = parse_resource_id(to_cluster_id)
+    if parsed_cluster_id:
         DEFAULT_CONSOLE.print(
-            f"State will be cloned to connected cluster:\n"
-            f"* Name: {parsed_to_cluster_id['name']}\n"
-            f"* Resource Group: {parsed_to_cluster_id['resource_group']}\n"
-            f"* Subscription: {parsed_to_cluster_id['subscription']}\n",
+            f"Clone will be replicated to connected cluster:\n"
+            f"* Name: {parsed_cluster_id['name']}\n"
+            f"* Resource Group: {parsed_cluster_id['resource_group']}\n"
+            f"* Subscription: {parsed_cluster_id['subscription']}\n",
             highlight=False,
         )
 
@@ -608,14 +619,17 @@ class CloneState:
         return self.content
 
     def get_restore_client(
-        self, to_cluster_id: str, template_mode: Optional[str] = None, no_progress: Optional[bool] = None
+        self,
+        parsed_cluster_id: Dict[str, str],
+        template_mode: Optional[str] = None,
+        no_progress: Optional[bool] = None,
     ) -> "InstanceRestore":
         return InstanceRestore(
             cmd=self.cmd,
             instances=self.instances,
             instance_record=self.instance_record,
             namespace=self.namespace,
-            cluster_resource_id=to_cluster_id,
+            parsed_cluster_id=parsed_cluster_id,
             template_content=self.content,
             user_assigned_mis=self.user_assigned_mis,
             template_mode=template_mode,

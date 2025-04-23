@@ -127,12 +127,16 @@ def get_deploy_url(cluster_sub_id: str, cluster_rg: str, deployment_name: str, p
     )
 
 
-def get_cluster_url(cluster_sub_id: str, cluster_rg: str, cluster_name: str) -> str:
+def get_cluster_url(cluster_sub_id: str, cluster_rg: str, cluster_name: str, just_id: bool = False) -> str:
     # client uses lowercase resourcegroups
-    return (
-        f"{BASE_URL}/subscriptions/{cluster_sub_id}/resourcegroups/{cluster_rg}"
-        f"/providers/Microsoft.Kubernetes/connectedClusters/{cluster_name}?api-version=2024-07-15-preview"
+    cluster_id = (
+        f"/subscriptions/{cluster_sub_id}/resourcegroups/{cluster_rg}"
+        f"/providers/Microsoft.Kubernetes/connectedClusters/{cluster_name}"
     )
+    if just_id:
+        return cluster_id
+
+    return f"{BASE_URL}{cluster_id}?api-version=2024-07-15-preview"
 
 
 def get_federated_creds_url(uami_sub_id: str, uami_rg_name: str, uami_name: str, fc_name: Optional[str] = None) -> str:
@@ -191,19 +195,21 @@ class CloneScenario:
         return self
 
     def wrap_cluster_deploy(
-        self: C, split_content: List[dict], to_cluster_id: Optional[str] = None
+        self: C,
+        split_content: List[dict],
+        parsed_cluster_id: Optional[str] = None,
+        connectivity_status: str = "Connected",
     ) -> List[responses.BaseResponse]:
-        if not to_cluster_id:
+        if not parsed_cluster_id:
             return
 
-        parsed_id = parse_resource_id(to_cluster_id)
-        cluster_sub_id = parsed_id["subscription"]
-        cluster_rg = parsed_id["resource_group"]
-        cluster_name = parsed_id["name"]
+        cluster_sub_id = parsed_cluster_id["subscription"]
+        cluster_rg = parsed_cluster_id["resource_group"]
+        cluster_name = parsed_cluster_id["name"]
 
         system_issuer = f"https://northamerica.oic.prod-arc.azure.com/{generate_uuid()}/{generate_uuid()}/"
         cluster_payload = {
-            "id": to_cluster_id,
+            "id": "mock",
             "name": cluster_name,
             "properties": {
                 "securityProfile": {"workloadIdentity": {"enabled": True}},
@@ -211,16 +217,17 @@ class CloneScenario:
                     "enabled": True,
                     "issuerUrl": system_issuer,
                 },
+                "connectivityStatus": connectivity_status,
             },
         }
-
+        # Always needed for connected cluster check.
+        self.responses.add(
+            method=responses.GET,
+            url=get_cluster_url(cluster_sub_id=cluster_sub_id, cluster_rg=cluster_rg, cluster_name=cluster_name),
+            json=cluster_payload,
+            status=200,
+        )
         if self.uami_ids:
-            self.responses.add(
-                method=responses.GET,
-                url=get_cluster_url(cluster_sub_id=cluster_sub_id, cluster_rg=cluster_rg, cluster_name=cluster_name),
-                json=cluster_payload,
-                status=200,
-            )
             for uami_id in self.uami_ids:
                 parsed_uami_id = parse_resource_id(uami_id)
                 cred_url = get_federated_creds_url(
@@ -744,23 +751,23 @@ def test_clone_manager(
 
     CloneAssertor(clone_scenario).assert_content(content)
 
-    cluster_sub_id = generate_uuid()
-    cluster_rg = generate_random_string()
-    cluster_name = generate_random_string()
     to_instance_name = generate_random_string()
-    to_cluster_id = (
-        f"/subscriptions/{cluster_sub_id}/resourceGroups/{cluster_rg}"
-        f"/providers/Microsoft.Kubernetes/connectedClusters/{cluster_name}"
+    to_cluster_resource_id = get_cluster_url(
+        cluster_sub_id=generate_uuid(),
+        cluster_rg=generate_random_string(),
+        cluster_name=generate_random_string(),
+        just_id=True,
     )
-    deploy_responses = clone_scenario.wrap_cluster_deploy([content], to_cluster_id=to_cluster_id)
+    parsed_to_cluster_id = parse_resource_id(to_cluster_resource_id)
+    deploy_responses = clone_scenario.wrap_cluster_deploy([content], parsed_cluster_id=parsed_to_cluster_id)
 
-    restore_client: InstanceRestore = clone_state.get_restore_client(to_cluster_id=to_cluster_id)
+    restore_client: InstanceRestore = clone_state.get_restore_client(parsed_cluster_id=parsed_to_cluster_id)
     restore_client.deploy(instance_name=to_instance_name)
     deploy_body_payload = json.loads(deploy_responses[0].calls[0].request.body)
 
     assert deploy_body_payload["properties"]["mode"] == "Incremental"
     assert deploy_body_payload["properties"]["parameters"] == {
-        "clusterName": {"value": cluster_name},
+        "clusterName": {"value": parsed_to_cluster_id["name"]},
         "instanceName": {"value": to_instance_name},
     }
 

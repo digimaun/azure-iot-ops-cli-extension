@@ -1077,8 +1077,8 @@ def load_iotops_arguments(self, _):
         context.argument(
             "to_instance_name",
             options_list=["--to-instance"],
-            help="The instance name that will be used when applying the clone. If omitted the "
-            "clone instance name will be used.",
+            help="The instance name that will be used when replicating the clone. If omitted the "
+            "model instance name will be used.",
             arg_group="Cluster Target",
         )
         context.argument(
