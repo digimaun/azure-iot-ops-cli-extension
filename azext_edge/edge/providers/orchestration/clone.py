@@ -12,7 +12,6 @@ from typing import TYPE_CHECKING, Any, Dict, Iterable, List, Optional, Tuple, Un
 
 from azure.cli.core.azclierror import AzureResponseError, ValidationError
 from knack.log import get_logger
-from packaging import version
 from rich.console import Console
 from rich.progress import (
     Progress,
@@ -56,6 +55,9 @@ if TYPE_CHECKING:
 
 
 DEFAULT_CONSOLE = Console()
+
+COMPAT_INSTANCE_VERS_MIN = "1.0.34"
+COMPAT_INSTANCE_VERS_MAX = "1.2.0"
 
 
 DEPLOYMENT_CHUNK_LEN = 800
@@ -493,6 +495,7 @@ def clone_instance(
     linked_base_uri: Optional[str] = None,
     no_progress: Optional[bool] = None,
     confirm_yes: Optional[bool] = None,
+    force: Optional[bool] = None,
     **_,
 ):
     clone_manager = CloneManager(
@@ -503,7 +506,7 @@ def clone_instance(
     )
     bundle_path = get_bundle_path(instance_name, bundle_dir=to_dir)
 
-    clone_state = clone_manager.analyze_cluster()
+    clone_state = clone_manager.analyze_cluster(force)
 
     if not no_progress:
         render_upgrade_table(
@@ -543,12 +546,16 @@ def render_upgrade_table(
             row_content.append("\n".join([r["resource_name"] for r in clone_state.resources[rtype]]))
         table.add_row(*row_content)
 
-    table.title += f" of {clone_state.instance_name}\nTotal resources {total}"
+    table.title += f" of {clone_state.instance_record['name']}\nTotal resources {total}"
     DEFAULT_CONSOLE.print(table)
-    # DEFAULT_CONSOLE.print(f"Total resources: {total}\n", highlight=True)
 
     if bundle_path:
         DEFAULT_CONSOLE.print(f"State will be saved to:\n-> {bundle_path}\n")
+        if clone_state.user_assigned_mis and not to_cluster_id:
+            DEFAULT_CONSOLE.print(
+                ":exclamation: Credential federation of user-assigned managed "
+                "identity is currently only supported using --to-cluster-id"
+            )
 
     if to_cluster_id:
         parsed_to_cluster_id = parse_resource_id(to_cluster_id)
@@ -643,7 +650,7 @@ class CloneManager:
         self.instance_identities: List[str] = []
         self.active_deployment: Dict[StateResourceKey, List[str]] = {}
 
-    def analyze_cluster(self) -> "CloneState":
+    def analyze_cluster(self, force: Optional[bool] = None) -> "CloneState":
         with Progress(
             SpinnerColumn("star"),
             *Progress.get_default_columns(),
@@ -651,9 +658,10 @@ class CloneManager:
             TimeElapsedColumn(),
             transient=True,
             disable=bool(self.no_progress),
-            # disable=True,
         ) as progress:
             _ = progress.add_task(f"Analyzing {self.instance_name}...", total=None)
+            self._ensure_compat(force)
+
             self._build_parameters()
             self._build_variables()
             self._build_metadata()
@@ -676,6 +684,26 @@ class CloneManager:
                 ),
                 user_assigned_mis=self.instance_identities,
             )
+
+    def _ensure_compat(self, force: Optional[bool] = None):
+        from packaging.version import parse
+
+        if force:
+            return
+
+        version = self.instance_record["properties"].get("version")
+        if not version:
+            raise ValidationError("Unable to determine version of the instance.")
+
+        parsed_version = parse(version)
+        if parsed_version >= parse(COMPAT_INSTANCE_VERS_MIN) and parsed_version < parse(COMPAT_INSTANCE_VERS_MAX):
+            return
+
+        raise ValidationError(
+            f"This clone client is not compatible with the target instance version {version}.\n"
+            f"The instance must be >={COMPAT_INSTANCE_VERS_MIN},<{COMPAT_INSTANCE_VERS_MAX}.\n"
+            "While not recommended, you can use --force flag to continue anyway."
+        )
 
     def _enumerate_resources(self):
         enumerated_map: dict = {}
@@ -1051,7 +1079,9 @@ class CloneManager:
             )
 
     def _analyze_instance_identity(self):
-        identity: dict = self.instance_record.get("identity", {}).get("userAssignedIdentities", {})
+        target_instance = getattr(self.rcontainer_map[StateResourceKey.INSTANCE.value], "resource_state", {})
+        identity: dict = target_instance.get("identity", {}).get("userAssignedIdentities", {})
+
         for rid in identity:
             identity[rid] = {}
             self.instance_identities.append(rid)

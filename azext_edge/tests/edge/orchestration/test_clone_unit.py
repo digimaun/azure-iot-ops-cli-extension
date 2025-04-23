@@ -877,6 +877,28 @@ def __replace_instance_resource(context: dict) -> dict:
     }
 
 
+def __replace_instance(context: dict):
+    instance = context["resource_configs"]["instance"]
+    kwargs = {}
+    if "identity" in instance:
+        kwargs["identity"] = {"type": "UserAssigned", "userAssignedIdentities": {}}
+        for identity in instance["identity"]["userAssignedIdentities"]:
+            kwargs["identity"]["userAssignedIdentities"][identity] = {}
+
+    payload = {
+        "apiVersion": "2025-04-01",
+        "name": "[parameters('instanceName')]",
+        "extendedLocation": {
+            "name": "[resourceId('Microsoft.ExtendedLocation/customLocations', parameters('customLocationName'))]",
+            "type": "CustomLocation",
+        },
+        "dependsOn": ["customLocation"],
+        **kwargs,
+    }
+
+    return payload
+
+
 def __replace_generic_resource(_: dict, api_version: str) -> dict:
     return {
         "apiVersion": api_version,
@@ -894,17 +916,7 @@ __replace_secretsync_resource = partial(__replace_generic_resource, api_version=
 EXPECTED_ORD_MIN_RESOURCE_MAP = {
     **EXPECTED_ORD_EXT_RESOURCE_MAP,
     "customLocation": {"replacements": __replace_cl},
-    "instance": {
-        "replacements": {
-            "apiVersion": "2025-04-01",
-            "name": "[parameters('instanceName')]",
-            "extendedLocation": {
-                "name": "[resourceId('Microsoft.ExtendedLocation/customLocations', parameters('customLocationName'))]",
-                "type": "CustomLocation",
-            },
-            "dependsOn": ["customLocation"],
-        }
-    },
+    "instance": {"replacements": __replace_instance},
     "roleAssignments": {},
     "broker": {
         "replacements": {

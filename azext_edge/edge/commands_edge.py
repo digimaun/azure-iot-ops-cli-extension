@@ -422,6 +422,7 @@ def clone_instance(
     linked_base_uri: Optional[str] = None,
     no_progress: Optional[bool] = None,
     confirm_yes: Optional[bool] = None,
+    force: Optional[bool] = None,
     **kwargs,
 ) -> dict:
     from .providers.orchestration.clone import clone_instance
@@ -439,4 +440,5 @@ def clone_instance(
         linked_base_uri=linked_base_uri,
         no_progress=no_progress,
         confirm_yes=confirm_yes,
+        force=force,
     )
