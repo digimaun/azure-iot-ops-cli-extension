@@ -197,19 +197,23 @@ class CloneScenario:
     def wrap_cluster_deploy(
         self: C,
         split_content: List[dict],
-        parsed_cluster_id: Optional[str] = None,
         connectivity_status: str = "Connected",
-    ) -> List[responses.BaseResponse]:
-        if not parsed_cluster_id:
-            return
+    ) -> Tuple[List[responses.BaseResponse], str]:
+        to_cluster_resource_id = get_cluster_url(
+            cluster_sub_id=generate_uuid(),
+            cluster_rg=generate_random_string(),
+            cluster_name=generate_random_string(),
+            just_id=True,
+        )
 
+        parsed_cluster_id = parse_resource_id(to_cluster_resource_id)
         cluster_sub_id = parsed_cluster_id["subscription"]
         cluster_rg = parsed_cluster_id["resource_group"]
         cluster_name = parsed_cluster_id["name"]
 
         system_issuer = f"https://northamerica.oic.prod-arc.azure.com/{generate_uuid()}/{generate_uuid()}/"
         cluster_payload = {
-            "id": "mock",
+            "id": to_cluster_resource_id,
             "name": cluster_name,
             "properties": {
                 "securityProfile": {"workloadIdentity": {"enabled": True}},
@@ -293,7 +297,7 @@ class CloneScenario:
                 content_type="application/json",
             )
             deploy_responses.append(r)
-        return deploy_responses
+        return deploy_responses, to_cluster_resource_id
 
     def add_extensions(self: C):
         extensions_endpoint = (
@@ -717,9 +721,9 @@ def test_clone_manager(
     add_secretsyncs: int,
     add_identities: int,
 ):
-    cluster_name = generate_random_string()
-    instance_name = generate_random_string()
-    resource_group_name = generate_random_string()
+    model_cluster_name = generate_random_string()
+    model_instance_name = generate_random_string()
+    model_resource_group_name = generate_random_string()
     add_resources_map = {
         "listeners": add_listeners,
         "authns": add_authns,
@@ -736,14 +740,17 @@ def test_clone_manager(
 
     clone_scenario.bootstrap(
         mocked_responses,
-        resource_group_name=resource_group_name,
-        instance_name=instance_name,
-        cluster_name=cluster_name,
+        resource_group_name=model_resource_group_name,
+        instance_name=model_instance_name,
+        cluster_name=model_cluster_name,
         add_resources_map=add_resources_map,
     )
 
     clone_manager = CloneManager(
-        cmd=mocked_cmd, resource_group_name=resource_group_name, instance_name=instance_name, no_progress=True
+        cmd=mocked_cmd,
+        resource_group_name=model_resource_group_name,
+        instance_name=model_instance_name,
+        no_progress=True,
     )
     clone_state = clone_manager.analyze_cluster()
     template_content = clone_state.get_content()
@@ -752,22 +759,16 @@ def test_clone_manager(
     CloneAssertor(clone_scenario).assert_content(content)
 
     to_instance_name = generate_random_string()
-    to_cluster_resource_id = get_cluster_url(
-        cluster_sub_id=generate_uuid(),
-        cluster_rg=generate_random_string(),
-        cluster_name=generate_random_string(),
-        just_id=True,
-    )
-    parsed_to_cluster_id = parse_resource_id(to_cluster_resource_id)
-    deploy_responses = clone_scenario.wrap_cluster_deploy([content], parsed_cluster_id=parsed_to_cluster_id)
+    deploy_responses, to_cluster_id = clone_scenario.wrap_cluster_deploy([content])
+    parsed_cluster_id = parse_resource_id(to_cluster_id)
 
-    restore_client: InstanceRestore = clone_state.get_restore_client(parsed_cluster_id=parsed_to_cluster_id)
+    restore_client: InstanceRestore = clone_state.get_restore_client(parsed_cluster_id=parsed_cluster_id)
     restore_client.deploy(instance_name=to_instance_name)
     deploy_body_payload = json.loads(deploy_responses[0].calls[0].request.body)
 
     assert deploy_body_payload["properties"]["mode"] == "Incremental"
     assert deploy_body_payload["properties"]["parameters"] == {
-        "clusterName": {"value": parsed_to_cluster_id["name"]},
+        "clusterName": {"value": parsed_cluster_id["name"]},
         "instanceName": {"value": to_instance_name},
     }
 
