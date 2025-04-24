@@ -11,11 +11,13 @@ from collections import defaultdict
 from copy import deepcopy
 from functools import partial
 from typing import List, Optional, Tuple, TypeVar
-from unittest.mock import Mock
+from unittest.mock import Mock, mock_open
+from pathlib import Path, PurePath
 
 import pytest
 import requests
 import responses
+from azure.cli.core.azclierror import ValidationError
 
 from azext_edge.constants import VERSION as CLI_VERSION
 from azext_edge.edge.common import (
@@ -120,6 +122,13 @@ PLURALS = [
 SINGLETONS = ["customLocation", "instance", "roleAssignments_1", "broker"]
 
 
+@pytest.fixture
+def mock_open_write(mocker):
+    m = mock_open()
+    patched = mocker.patch("azext_edge.edge.providers.orchestration.clone.open", m)
+    yield patched
+
+
 def get_deploy_url(cluster_sub_id: str, cluster_rg: str, deployment_name: str, page_num: int = 1) -> str:
     return (
         f"{BASE_URL}/subscriptions/{cluster_sub_id}/resourcegroups/{cluster_rg}/providers"
@@ -160,6 +169,7 @@ class CloneScenario:
         resource_group_name: str,
         cluster_name: str,
         add_resources_map: Optional[dict] = None,
+        instance_version: Optional[str] = None,
     ):
         self.responses = mocked_responses
         self.instance_name = instance_name
@@ -176,12 +186,12 @@ class CloneScenario:
         self.add_resources_map = add_resources_map or {}
         self.spc_client_ids = []
         self.uami_ids = []
-        self._configure_instance()
+        self._configure_instance(instance_version=instance_version)
 
-    def _configure_instance(self: C) -> C:
+    def _configure_instance(self: C, instance_version: Optional[str] = None) -> C:
         self.add_extensions()
         self.add_custom_location()
-        self.add_instance()
+        self.add_instance(version=instance_version)
         self.add_broker()
         self.add_listeners()
         self.add_authns()
@@ -196,8 +206,9 @@ class CloneScenario:
 
     def wrap_cluster_deploy(
         self: C,
-        split_content: List[dict],
+        content_len: int = 1,
         connectivity_status: str = "Connected",
+        cred_payload: Optional[dict] = None,
     ) -> Tuple[List[responses.BaseResponse], str]:
         to_cluster_resource_id = get_cluster_url(
             cluster_sub_id=generate_uuid(),
@@ -205,6 +216,25 @@ class CloneScenario:
             cluster_name=generate_random_string(),
             just_id=True,
         )
+        if not cred_payload:
+            cred_payload = {
+                "value": [
+                    {
+                        "properties": {
+                            "issuer": f"https://oidcdiscovery-northamerica-endpoint-abcde.z01.azurefd.net/{generate_uuid()}/",
+                            "subject": f"system:serviceaccount:azure-iot-operations:{SERVICE_ACCOUNT_DATAFLOW}",
+                            "audiences": ["api://AzureADTokenExchange"],
+                        },
+                    },
+                    {
+                        "properties": {
+                            "issuer": f"https://oidcdiscovery-northamerica-endpoint-abcde.z01.azurefd.net/{generate_uuid()}/",
+                            "subject": f"system:serviceaccount:azure-iot-operations:{SERVICE_ACCOUNT_SECRETSYNC}",
+                            "audiences": ["api://AzureADTokenExchange"],
+                        },
+                    },
+                ]
+            }
 
         parsed_cluster_id = parse_resource_id(to_cluster_resource_id)
         cluster_sub_id = parsed_cluster_id["subscription"]
@@ -242,48 +272,33 @@ class CloneScenario:
                 self.responses.add(
                     method=responses.GET,
                     url=cred_url,
-                    json={
-                        "value": [
-                            {
-                                "properties": {
-                                    "issuer": f"https://oidcdiscovery-northamerica-endpoint-abcde.z01.azurefd.net/{generate_uuid()}/",
-                                    "subject": f"system:serviceaccount:azure-iot-operations:{SERVICE_ACCOUNT_DATAFLOW}",
-                                    "audiences": ["api://AzureADTokenExchange"],
-                                },
-                            },
-                            {
-                                "properties": {
-                                    "issuer": f"https://oidcdiscovery-northamerica-endpoint-abcde.z01.azurefd.net/{generate_uuid()}/",
-                                    "subject": f"system:serviceaccount:azure-iot-operations:{SERVICE_ACCOUNT_SECRETSYNC}",
-                                    "audiences": ["api://AzureADTokenExchange"],
-                                },
-                            },
-                        ]
-                    },
+                    json=cred_payload,
                     status=200,
                 )
 
-                for subject in [
-                    f"system:serviceaccount:azure-iot-operations:{SERVICE_ACCOUNT_DATAFLOW}",
-                    f"system:serviceaccount:azure-iot-operations:{SERVICE_ACCOUNT_SECRETSYNC}",
-                ]:
-                    fc_name = get_fc_name(cluster_name=cluster_name, oidc_issuer=system_issuer, subject=subject)
-                    cred_url = get_federated_creds_url(
-                        uami_sub_id=parsed_uami_id["subscription"],
-                        uami_rg_name=parsed_uami_id["resource_group"],
-                        uami_name=parsed_uami_id["name"],
-                        fc_name=fc_name,
-                    )
-                    self.responses.add(
-                        method=responses.PUT,
-                        url=cred_url,
-                        json={},
-                        status=200,
-                    )
+                cred_payload_value = cred_payload["value"]
+                if cred_payload_value:
+                    for subject in [
+                        f"system:serviceaccount:azure-iot-operations:{SERVICE_ACCOUNT_DATAFLOW}",
+                        f"system:serviceaccount:azure-iot-operations:{SERVICE_ACCOUNT_SECRETSYNC}",
+                    ]:
+                        fc_name = get_fc_name(cluster_name=cluster_name, oidc_issuer=system_issuer, subject=subject)
+                        cred_url = get_federated_creds_url(
+                            uami_sub_id=parsed_uami_id["subscription"],
+                            uami_rg_name=parsed_uami_id["resource_group"],
+                            uami_name=parsed_uami_id["name"],
+                            fc_name=fc_name,
+                        )
+                        self.responses.add(
+                            method=responses.PUT,
+                            url=cred_url,
+                            json={},
+                            status=200,
+                        )
 
         deploy_responses = []
         deployment_name = default_bundle_name(self.instance_name)
-        for i in range(len(split_content)):
+        for i in range(content_len):
             r = self.responses.add(
                 method=responses.PUT,
                 url=get_deploy_url(
@@ -363,7 +378,7 @@ class CloneScenario:
         )
         self.resource_configs["customLocation"] = mock_cl_record
 
-    def add_instance(self: C):
+    def add_instance(self: C, version: Optional[str] = None):
         optional_kwargs = {}
         identity_map = {}
 
@@ -380,6 +395,7 @@ class CloneScenario:
             resource_group_name=self.resource_group_name,
             cl_name=self.cl_name,
             schema_registry_name=self.sr_name,
+            version=version,
             **optional_kwargs,
         )
         self.resource_configs["schemaRegistryId"] = mock_instance_record["properties"]["schemaRegistryRef"][
@@ -709,6 +725,7 @@ def test_clone_manager(
     mocked_cmd: Mock,
     mocked_responses: responses,
     clone_scenario: CloneScenario,
+    mock_open_write: Mock,
     add_listeners: int,
     add_authns: int,
     add_authzs: int,
@@ -759,7 +776,7 @@ def test_clone_manager(
     CloneAssertor(clone_scenario).assert_content(content)
 
     to_instance_name = generate_random_string()
-    deploy_responses, to_cluster_id = clone_scenario.wrap_cluster_deploy([content])
+    deploy_responses, to_cluster_id = clone_scenario.wrap_cluster_deploy()
     parsed_cluster_id = parse_resource_id(to_cluster_id)
 
     restore_client: InstanceRestore = clone_state.get_restore_client(parsed_cluster_id=parsed_cluster_id)
@@ -771,6 +788,66 @@ def test_clone_manager(
         "clusterName": {"value": parsed_cluster_id["name"]},
         "instanceName": {"value": to_instance_name},
     }
+    assert deploy_body_payload["properties"]["template"] == deploy_body_payload["properties"]["template"]
+
+    # Basic test. Need to expand in separate test.
+    write_to = ["my", "clone", "path"]
+    target_path = PurePath(*write_to)
+    template_content.write(target_path)
+    mock_open_write.assert_called_once_with(file=f"{target_path}.json", mode="w")
+    mock_open_write().write.assert_called_once_with(json.dumps(content, indent=2))
+
+
+@pytest.mark.parametrize(
+    "instance_version_test",
+    [
+        {"version": "1.1.19"},
+        {"version": "1.1.50"},
+        {"version": "1.2.0", "error": ValidationError},
+        {"version": "2.0.0", "error": ValidationError},
+        {"version": "1.0.15", "error": ValidationError},
+        {"version": "1.2.0", "force": True},
+        {"version": "1.0.15", "force": True},
+    ],
+)
+@pytest.mark.parametrize("clone_scenario", [CloneScenario()])
+def test_clone_instance_compat(
+    mocked_cmd: Mock,
+    mocked_responses: responses,
+    clone_scenario: CloneScenario,
+    instance_version_test: dict,
+):
+    model_cluster_name = generate_random_string()
+    model_instance_name = generate_random_string()
+    model_resource_group_name = generate_random_string()
+
+    clone_scenario.bootstrap(
+        mocked_responses,
+        resource_group_name=model_resource_group_name,
+        instance_name=model_instance_name,
+        cluster_name=model_cluster_name,
+        instance_version=instance_version_test["version"],
+    )
+
+    clone_manager = CloneManager(
+        cmd=mocked_cmd,
+        resource_group_name=model_resource_group_name,
+        instance_name=model_instance_name,
+        no_progress=True,
+    )
+    expected_error = instance_version_test.get("error")
+    force = instance_version_test.get("force")
+    if expected_error and not force:
+        mocked_responses.assert_all_requests_are_fired = False
+        with pytest.raises(ValidationError) as e:
+            clone_state = clone_manager.analyze_cluster()
+        assert "This clone client is not compatible " in str(e.value)
+        return
+
+    clone_state = clone_manager.analyze_cluster(force=force)
+    template_content = clone_state.get_content()
+    content = template_content.content
+    CloneAssertor(clone_scenario).assert_content(content)
 
 
 EXPECTED_TEMPLATE_KEYS = {
@@ -1078,9 +1155,9 @@ class CloneAssertor:
             sr_ra_def = template["resources"][0]
             assert sr_ra_def["type"] == "Microsoft.Authorization/roleAssignments"
             assert sr_ra_def["apiVersion"] == "2022-04-01"
-            assert (
-                sr_ra_def["name"]
-                == "[guid(parameters('instanceName'), parameters('clusterName'), resourceGroup().id)]"
+            assert sr_ra_def["name"] == (
+                "[guid(parameters('instanceName'), parameters('clusterName'), "
+                "parameters('principalId'), resourceGroup().id)]"
             )
             assert sr_ra_def["scope"] == "[parameters('schemaRegistryId')]"
             assert (

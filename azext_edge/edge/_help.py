@@ -26,6 +26,8 @@ from .providers.support_bundle import (
     COMPAT_DATAFLOW_APIS,
 )
 
+from .providers.orchestration.clone import COMPAT_INSTANCE_VERS_MIN, COMPAT_INSTANCE_VERS_MAX
+
 
 def load_iotops_help():
     helps[
@@ -1956,12 +1958,15 @@ def load_iotops_help():
 
     helps[
         "iot ops clone"
-    ] = """
+    ] = f"""
         type: command
         short-summary: Clone an instance.
-        long-summary: Clone analyzes an instance then reproduces it in an infrastructure-as-code
+        long-summary: |
+          Clone analyzes an instance then reproduces it in an infrastructure-as-code
           manner via ARM templates. The output of clone may be applied directly to another connected cluster
           or, be saved locally to use at another time (potentially with modification).
+
+          Clone is compatible with the following instance version range: {COMPAT_INSTANCE_VERS_MIN}>=,<{COMPAT_INSTANCE_VERS_MAX}
 
         examples:
         - name: Clone an instance to a desired connected cluster.

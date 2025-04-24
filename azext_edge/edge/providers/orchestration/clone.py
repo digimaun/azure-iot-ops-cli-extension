@@ -54,6 +54,9 @@ if TYPE_CHECKING:
     from azure.core.polling import LROPoller
 
 
+logger = get_logger(__name__)
+
+
 DEFAULT_CONSOLE = Console()
 
 COMPAT_INSTANCE_VERS_MIN = "1.0.34"
@@ -62,9 +65,6 @@ COMPAT_INSTANCE_VERS_MAX = "1.2.0"
 
 DEPLOYMENT_CHUNK_LEN = 800
 DEPLOYMENT_DATA_SIZE_KB = 1024
-
-
-logger = get_logger(__name__)
 
 
 class SummaryMode(Enum):
@@ -1357,7 +1357,7 @@ def get_role_assignment():
         "type": "Microsoft.Authorization/roleAssignments",
         "name": (
             f"[guid(parameters('{TemplateParams.INSTANCE_NAME.value}'), "
-            f"parameters('{TemplateParams.CLUSTER_NAME.value}'), resourceGroup().id)]"
+            f"parameters('{TemplateParams.CLUSTER_NAME.value}'), parameters('principalId'), resourceGroup().id)]"
         ),
         "scope": f"[parameters('{TemplateParams.SCHEMA_REGISTRY_ID.value}')]",
         "properties": {
