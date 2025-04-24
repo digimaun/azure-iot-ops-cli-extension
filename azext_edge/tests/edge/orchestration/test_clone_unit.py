@@ -803,8 +803,9 @@ def test_clone_manager(
 @pytest.mark.parametrize(
     "instance_version_test",
     [
-        {"version": "1.1.19"},
         {"version": "1.1.50"},
+        {"version": "1.1.19"},
+        {"version": "1.0.34"},
         {"version": "1.2.0", "error": ValidationError},
         {"version": "2.0.0", "error": ValidationError},
         {"version": "1.0.9", "error": ValidationError},

@@ -60,7 +60,7 @@ logger = get_logger(__name__)
 
 DEFAULT_CONSOLE = Console()
 
-COMPAT_INSTANCE_VERS_MIN = "1.0.15"
+COMPAT_INSTANCE_VERS_MIN = "1.0.34"
 COMPAT_INSTANCE_VERS_MAX = "1.2.0"
 
 
