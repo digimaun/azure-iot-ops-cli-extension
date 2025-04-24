@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING, Any, Dict, Iterable, List, Optional, Tuple, Un
 
 from azure.cli.core.azclierror import ValidationError
 from knack.log import get_logger
+from packaging.version import parse as parse_version
 from rich.console import Console
 from rich.progress import (
     Progress,
@@ -32,7 +33,7 @@ from ...util.az_client import (
     get_resource_client,
     wait_for_terminal_state,
 )
-from ...util.id_tools import parse_resource_id, is_valid_resource_id
+from ...util.id_tools import is_valid_resource_id, parse_resource_id
 from .common import (
     CONTRIBUTOR_ROLE_ID,
     CUSTOM_LOCATIONS_API_VERSION,
@@ -59,7 +60,7 @@ logger = get_logger(__name__)
 
 DEFAULT_CONSOLE = Console()
 
-COMPAT_INSTANCE_VERS_MIN = "1.0.34"
+COMPAT_INSTANCE_VERS_MIN = "1.0.15"
 COMPAT_INSTANCE_VERS_MAX = "1.2.0"
 
 
@@ -653,6 +654,7 @@ class CloneManager:
         self.instance_record = self.instances.show(
             name=self.instance_name, resource_group_name=self.resource_group_name
         )
+        self.version_guru = VersionGuru(self.instance_record)
         self.custom_location = self.instances._get_associated_cl(self.instance_record)
 
         self.resource_map = self.instances.get_resource_map(self.instance_record)
@@ -674,7 +676,7 @@ class CloneManager:
             disable=bool(self.no_progress),
         ) as progress:
             _ = progress.add_task(f"Analyzing {self.instance_name}...", total=None)
-            self._ensure_compat(force)
+            self.version_guru.ensure_compat(force)
 
             self._build_parameters()
             self._build_variables()
@@ -698,26 +700,6 @@ class CloneManager:
                 ),
                 user_assigned_mis=self.instance_identities,
             )
-
-    def _ensure_compat(self, force: Optional[bool] = None):
-        from packaging.version import parse
-
-        if force:
-            return
-
-        version = self.instance_record["properties"].get("version")
-        if not version:
-            raise ValidationError("Unable to determine version of the instance.")
-
-        parsed_version = parse(version)
-        if parsed_version >= parse(COMPAT_INSTANCE_VERS_MIN) and parsed_version < parse(COMPAT_INSTANCE_VERS_MAX):
-            return
-
-        raise ValidationError(
-            f"This clone client is not compatible with the target instance version {version}.\n"
-            f"The instance must be >={COMPAT_INSTANCE_VERS_MIN},<{COMPAT_INSTANCE_VERS_MAX}.\n"
-            "While not recommended, you can use --force flag to continue anyway."
-        )
 
     def _enumerate_resources(self):
         enumerated_map: dict = {}
@@ -824,7 +806,7 @@ class CloneManager:
             )
 
     def _analyze_instance(self):
-        api_version = self.instances.iotops_mgmt_client._config.api_version
+        api_version = self.version_guru.get_instance_api()
         custom_location = deepcopy(self.custom_location)
         custom_location["properties"]["hostResourceId"] = TEMPLATE_EXPRESSION_MAP["clusterId"]
         custom_location["name"] = TEMPLATE_EXPRESSION_MAP["customLocationName"]
@@ -886,7 +868,7 @@ class CloneManager:
         )
 
     def _analyze_instance_resources(self):
-        api_version = self.instances.iotops_mgmt_client._config.api_version
+        api_version = self.version_guru.get_instance_api()
         brokers_iter = self.instances.iotops_mgmt_client.broker.list_by_resource_group(
             resource_group_name=self.resource_group_name, instance_name=self.instance_name
         )
@@ -1368,3 +1350,33 @@ def get_role_assignment():
             "principalType": "ServicePrincipal",
         },
     }
+
+
+# TODO: Work out goals, placement and version library
+class VersionGuru:
+    def __init__(self, instance: dict):
+        self.instance = instance
+        self.version: str = self.instance["properties"].get("version")
+        if not self.version:
+            raise ValidationError("Unable to determine version of the instance.")
+        self.parsed_version = parse_version(self.version)
+
+    def ensure_compat(self, force: Optional[bool] = None):
+        if force:
+            return
+
+        if self.parsed_version >= parse_version(COMPAT_INSTANCE_VERS_MIN) and self.parsed_version < parse_version(
+            COMPAT_INSTANCE_VERS_MAX
+        ):
+            return
+
+        raise ValidationError(
+            f"This clone client is not compatible with the target instance version {self.version}.\n"
+            f"The instance must be >={COMPAT_INSTANCE_VERS_MIN},<{COMPAT_INSTANCE_VERS_MAX}.\n"
+            "While not recommended, you can use --force flag to continue anyway."
+        )
+
+    def get_instance_api(self) -> str:
+        if self.parsed_version < parse_version("1.1.0"):
+            return "2024-11-01"
+        return "2025-04-01"

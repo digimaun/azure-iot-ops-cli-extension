@@ -10,9 +10,9 @@ import re
 from collections import defaultdict
 from copy import deepcopy
 from functools import partial
+from pathlib import PurePath
 from typing import List, Optional, Tuple, TypeVar
 from unittest.mock import Mock, mock_open
-from pathlib import Path, PurePath
 
 import pytest
 import requests
@@ -33,8 +33,10 @@ from azext_edge.edge.providers.orchestration.clone import (
     SERVICE_ACCOUNT_SECRETSYNC,
     CloneManager,
     InstanceRestore,
+    VersionGuru,
     default_bundle_name,
     get_fc_name,
+    parse_version,
 )
 from azext_edge.edge.providers.orchestration.common import (
     EXTENSION_TYPE_ACS,
@@ -805,9 +807,9 @@ def test_clone_manager(
         {"version": "1.1.50"},
         {"version": "1.2.0", "error": ValidationError},
         {"version": "2.0.0", "error": ValidationError},
-        {"version": "1.0.15", "error": ValidationError},
+        {"version": "1.0.9", "error": ValidationError},
         {"version": "1.2.0", "force": True},
-        {"version": "1.0.15", "force": True},
+        {"version": "1.0.9", "force": True},
     ],
 )
 @pytest.mark.parametrize("clone_scenario", [CloneScenario()])
@@ -953,7 +955,7 @@ def __replace_instance_resource(context: dict) -> dict:
         config_name = f"/{profile_name}/{config_name}"
 
     return {
-        "apiVersion": "2025-04-01",
+        "apiVersion": context["instance_api"],
         "name": f"[concat(parameters('instanceName'), '{config_name}')]",
         "extendedLocation": {
             "name": "[resourceId('Microsoft.ExtendedLocation/customLocations', parameters('customLocationName'))]",
@@ -971,7 +973,7 @@ def __replace_instance(context: dict):
             kwargs["identity"]["userAssignedIdentities"][identity] = {}
 
     payload = {
-        "apiVersion": "2025-04-01",
+        "apiVersion": context["instance_api"],
         "name": "[parameters('instanceName')]",
         "extendedLocation": {
             "name": "[resourceId('Microsoft.ExtendedLocation/customLocations', parameters('customLocationName'))]",
@@ -982,6 +984,18 @@ def __replace_instance(context: dict):
     }
 
     return payload
+
+
+def __replace_instance_broker(context: dict):
+    return {
+        "apiVersion": context["instance_api"],
+        "name": "[concat(parameters('instanceName'), '/default')]",
+        "extendedLocation": {
+            "name": "[resourceId('Microsoft.ExtendedLocation/customLocations', parameters('customLocationName'))]",
+            "type": "CustomLocation",
+        },
+        "dependsOn": ["instance"],
+    }
 
 
 def __replace_generic_resource(_: dict, api_version: str) -> dict:
@@ -1003,17 +1017,7 @@ EXPECTED_ORD_MIN_RESOURCE_MAP = {
     "customLocation": {"replacements": __replace_cl},
     "instance": {"replacements": __replace_instance},
     "roleAssignments": {},
-    "broker": {
-        "replacements": {
-            "apiVersion": "2025-04-01",
-            "name": "[concat(parameters('instanceName'), '/default')]",
-            "extendedLocation": {
-                "name": "[resourceId('Microsoft.ExtendedLocation/customLocations', parameters('customLocationName'))]",
-                "type": "CustomLocation",
-            },
-            "dependsOn": ["instance"],
-        }
-    },
+    "broker": {"replacements": __replace_instance_broker},
     "listeners": {"replacements": __replace_instance_resource},
     "authns": {"replacements": __replace_instance_resource},
     "authzs": {"replacements": __replace_instance_resource},
@@ -1032,6 +1036,7 @@ class CloneAssertor:
         self.clone_scenario = clone_scenario
         self.resource_configs = clone_scenario.resource_configs
         self.extension_name_map = {}
+        self.instance_api = VersionGuru(self.resource_configs["instance"]).get_instance_api()
 
     def assert_content(self, content: dict):
         assert isinstance(content, dict), "content should be a dictionary"
@@ -1074,6 +1079,13 @@ class CloneAssertor:
 
         self._assert_resources(content)
 
+    def _assert_instance_api(self):
+        parsed_version = parse_version(self.resource_configs["instance"]["properties"]["version"])
+
+        if parsed_version < parse_version("1.1.0"):
+            assert self.instance_api == "2024-11-01"
+        assert self.instance_api == "2025-04-01"
+
     def _assert_resources(self, content: dict):
         assert isinstance(content["resources"], dict), "Resources key should be a dictionary"
         assert content["resources"], "Resources dict should not be empty"
@@ -1114,7 +1126,11 @@ class CloneAssertor:
         component_replacements = component_meta.get("replacements")
         if component_replacements:
             if callable(component_replacements):
-                context = {"config": component_config, "resource_configs": self.resource_configs}
+                context = {
+                    "config": component_config,
+                    "resource_configs": self.resource_configs,
+                    "instance_api": self.instance_api,
+                }
                 component_replacements = component_replacements(context)
             component_config.update(component_replacements)
         self._prune_resource(component_config)
