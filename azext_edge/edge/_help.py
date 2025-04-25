@@ -4,7 +4,7 @@
 # Licensed under the MIT License. See License file in the project root for license information.
 # ----------------------------------------------------------------------------------------------
 """
-Help definitions for Digital Twins commands.
+Help content for Azure IoT Operations commands.
 """
 
 from knack.help_files import helps
@@ -18,15 +18,16 @@ from azext_edge.edge.providers.edge_api import (
     TRUSTMANAGER_API_V1,
 )
 
-
+from .providers.orchestration.clone import (
+    COMPAT_INSTANCE_VERS_MAX,
+    COMPAT_INSTANCE_VERS_MIN,
+)
 from .providers.support_bundle import (
     COMPAT_CLUSTER_CONFIG_APIS,
+    COMPAT_DATAFLOW_APIS,
     COMPAT_DEVICEREGISTRY_APIS,
     COMPAT_MQTT_BROKER_APIS,
-    COMPAT_DATAFLOW_APIS,
 )
-
-from .providers.orchestration.clone import COMPAT_INSTANCE_VERS_MIN, COMPAT_INSTANCE_VERS_MAX
 
 
 def load_iotops_help():
