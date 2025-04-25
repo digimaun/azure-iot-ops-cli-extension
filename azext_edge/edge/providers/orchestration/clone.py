@@ -9,6 +9,7 @@ from enum import Enum
 from json import dumps
 from pathlib import Path, PurePath
 from typing import TYPE_CHECKING, Any, Dict, Iterable, List, Optional, Tuple, Union
+from uuid import uuid4
 
 from azure.cli.core.azclierror import ValidationError
 from knack.log import get_logger
@@ -382,10 +383,12 @@ class InstanceRestore:
     ) -> Optional["LROPoller"]:
         deployment_params = {"properties": {"mode": "Incremental", "template": content, "parameters": parameters}}
 
+        headers = {"x-ms-correlation-request-id": str(uuid4()), "CommandName": "iot ops clone"}
         return self.resource_client.deployments.begin_create_or_update(
             resource_group_name=self.resource_group_name,
             deployment_name=deployment_name,
             parameters=deployment_params,
+            headers=headers,
         )
 
     def _handle_federation(self, use_self_hosted_issuer: Optional[bool] = None):
@@ -461,7 +464,7 @@ class InstanceRestore:
             self._handle_federation(use_self_hosted_issuer)
 
             for i in range(total_pages):
-                status = f"Initiating {deployment_name} {i+1}/{total_pages}"
+                status = f"Replicating {deployment_name} {i+1}/{total_pages}"
                 console.update(status=status)
                 page = f"_{i+1}" if total_pages > 1 else ""
                 poller = self._deploy_template(
@@ -568,7 +571,7 @@ def render_upgrade_table(
         if clone_state.user_assigned_mis and not parsed_cluster_id:
             DEFAULT_CONSOLE.print(
                 ":exclamation: Credential federation of user-assigned managed "
-                "identity is currently only supported using --to-cluster-id"
+                "identity is currently only supported using --to-cluster-id."
             )
 
     if parsed_cluster_id:

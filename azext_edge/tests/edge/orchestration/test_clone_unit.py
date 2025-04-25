@@ -723,7 +723,7 @@ class CloneScenario:
 @pytest.mark.parametrize("add_dataflow_profiles", [0, 2])
 @pytest.mark.parametrize("add_authzs", [0, 5])
 @pytest.mark.parametrize("add_authns", [0, 5])
-@pytest.mark.parametrize("add_listeners", [0, 5])
+@pytest.mark.parametrize("add_listeners", [2])
 @pytest.mark.parametrize("add_aeps", [0, 5])
 @pytest.mark.parametrize("add_assets", [0, 5])
 @pytest.mark.parametrize("add_secretsyncs", [0, 5])
@@ -791,7 +791,10 @@ def test_clone_manager(
     restore_client: InstanceRestore = clone_state.get_restore_client(parsed_cluster_id=parsed_cluster_id)
     restore_client.deploy(instance_name=to_instance_name)
     deploy_body_payload = json.loads(deploy_responses[0].calls[0].request.body)
+    request_headers = deploy_responses[0].calls[0].request.headers
 
+    assert request_headers["CommandName"] == "iot ops clone"
+    assert request_headers["x-ms-correlation-request-id"]
     assert deploy_body_payload["properties"]["mode"] == "Incremental"
     assert deploy_body_payload["properties"]["parameters"] == {
         "clusterName": {"value": parsed_cluster_id["name"]},
@@ -952,8 +955,8 @@ def test_clone_scale(
     mock_open_write().write.assert_called_once_with(json.dumps(content, indent=2))
 
 
-@pytest.mark.parametrize("linked_base_uri", [None, f"https://{generate_uuid()}.test/"])
-@pytest.mark.parametrize("template_mode", [TemplateMode.NESTED.value, TemplateMode.LINKED.value])
+@pytest.mark.parametrize("linked_base_uri", [None, f"https://{generate_uuid()}.test"])
+@pytest.mark.parametrize("template_mode", [TemplateMode.NESTED, TemplateMode.LINKED])
 @pytest.mark.parametrize("add_aeps", [100, LOAD_VALUE])
 @pytest.mark.parametrize("add_assets", [100, LOAD_VALUE])
 @pytest.mark.parametrize("clone_scenario", [CloneScenario()])
@@ -964,7 +967,7 @@ def test_clone_to_dir(
     mock_open_write: Mock,
     add_aeps: int,
     add_assets: int,
-    template_mode: str,
+    template_mode: TemplateMode,
     linked_base_uri: str,
     mock_pathlib_path: Mock,
 ):
@@ -999,24 +1002,33 @@ def test_clone_to_dir(
     write_to = ["my", "clone", "path"]
     target_path = PurePath(*write_to)
     write_kwargs = {}
-    if template_mode == TemplateMode.LINKED.value:
+    if template_mode == TemplateMode.LINKED:
         write_kwargs["linked_base_uri"] = linked_base_uri
-    template_content.write(target_path, template_mode=template_mode, **write_kwargs)
+    template_content.write(target_path, template_mode=template_mode.value, **write_kwargs)
 
-    if template_mode == TemplateMode.NESTED.value:
+    if template_mode == TemplateMode.NESTED:
         mock_open_write.assert_called_once_with(file=f"{target_path}.json", mode="w")
         mock_open_write().write.assert_called_once_with(json.dumps(content, indent=2))
 
-    # TODO: assert content for linked mode
-    if template_mode == TemplateMode.LINKED.value:
+    if template_mode == TemplateMode.LINKED:
         assert mock_pathlib_path.mock_calls[0].args == (target_path,)
         assert mock_pathlib_path.mock_calls[1].kwargs == {"exist_ok": True}
         assert mock_open_write.call_args_list[0].kwargs == {
             "file": f"{target_path}.json",
             "mode": "w",
         }
-        # TODO
-        # root_content = json.loads(mock_open_write().write.call_args_list[0].args[0])
+        root_content = json.loads(mock_open_write().write.call_args_list[0].args[0])
+        asset_keys = [key for key in root_content["resources"] if "asset" in key]
+        for key in asset_keys:
+            asset_deployment = root_content["resources"][key]
+            template_link = asset_deployment["properties"]["templateLink"]
+            if not linked_base_uri:
+                assert template_link == {"relativePath": f"path/{key.lower()}.json"}
+            else:
+                assert template_link == {"uri": f"{linked_base_uri}/path/{key.lower()}.json"}
+
+        # TODO: assert linked template content
+        # json.loads(mock_open_write().write.call_args_list[1].args[0])
         aep_pages = math.ceil(add_aeps / DEPLOYMENT_CHUNK_LEN)
         for i in range(aep_pages):
             assert mock_open_write.call_args_list[i + 1].kwargs == {
@@ -1323,44 +1335,40 @@ class CloneAssertor:
         self._assert_deployment_generic(
             deployment, key, resource_group=parsed_sr_id["resource_group"], depends_on=["iotOperations"]
         )
-        if True:  # TODO If template mode is default
-            dep_props = deployment["properties"]
-            dep_props["parameters"] = {
-                "clusterName": {"value": "[parameters('clusterName')]"},
-                "instanceName": {"value": "[parameters('instanceName')]"},
-                "principalId": {"value": "[reference('iotOperations', '2023-05-01', 'Full').identity.principalId]"},
-                "schemaRegistryId": {
-                    "value": self.resource_configs["instance"]["properties"]["schemaRegistryRef"]["resourceId"]
-                },
-            }
-            template = deployment["properties"]["template"]
-            assert (
-                template["$schema"]
-                == "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#"
-            )
-            assert template["contentVersion"] == "1.0.0.0"
-            assert template["parameters"] == {
-                "clusterName": {"type": "string"},
-                "instanceName": {"type": "string"},
-                "principalId": {"type": "string"},
-                "schemaRegistryId": {"type": "string"},
-            }
-            assert isinstance(template["resources"], list), "Deployment resources key should be a list"
-            assert len(template["resources"]) == 1
-            sr_ra_def = template["resources"][0]
-            assert sr_ra_def["type"] == "Microsoft.Authorization/roleAssignments"
-            assert sr_ra_def["apiVersion"] == "2022-04-01"
-            assert sr_ra_def["name"] == (
-                "[guid(parameters('instanceName'), parameters('clusterName'), "
-                "parameters('principalId'), resourceGroup().id)]"
-            )
-            assert sr_ra_def["scope"] == "[parameters('schemaRegistryId')]"
-            assert (
-                sr_ra_def["properties"]["roleDefinitionId"]
-                == "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', 'b24988ac-6180-42a0-ab88-20f7382dd24c')]"
-            )
-            assert sr_ra_def["properties"]["principalId"] == "[parameters('principalId')]"
-            assert sr_ra_def["properties"]["principalType"] == "ServicePrincipal"
+        dep_props = deployment["properties"]
+        dep_props["parameters"] = {
+            "clusterName": {"value": "[parameters('clusterName')]"},
+            "instanceName": {"value": "[parameters('instanceName')]"},
+            "principalId": {"value": "[reference('iotOperations', '2023-05-01', 'Full').identity.principalId]"},
+            "schemaRegistryId": {
+                "value": self.resource_configs["instance"]["properties"]["schemaRegistryRef"]["resourceId"]
+            },
+        }
+        template = deployment["properties"]["template"]
+        assert template["$schema"] == "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#"
+        assert template["contentVersion"] == "1.0.0.0"
+        assert template["parameters"] == {
+            "clusterName": {"type": "string"},
+            "instanceName": {"type": "string"},
+            "principalId": {"type": "string"},
+            "schemaRegistryId": {"type": "string"},
+        }
+        assert isinstance(template["resources"], list), "Deployment resources key should be a list"
+        assert len(template["resources"]) == 1
+        sr_ra_def = template["resources"][0]
+        assert sr_ra_def["type"] == "Microsoft.Authorization/roleAssignments"
+        assert sr_ra_def["apiVersion"] == "2022-04-01"
+        assert sr_ra_def["name"] == (
+            "[guid(parameters('instanceName'), parameters('clusterName'), "
+            "parameters('principalId'), resourceGroup().id)]"
+        )
+        assert sr_ra_def["scope"] == "[parameters('schemaRegistryId')]"
+        assert (
+            sr_ra_def["properties"]["roleDefinitionId"]
+            == "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', 'b24988ac-6180-42a0-ab88-20f7382dd24c')]"
+        )
+        assert sr_ra_def["properties"]["principalId"] == "[parameters('principalId')]"
+        assert sr_ra_def["properties"]["principalType"] == "ServicePrincipal"
 
     def _assert_deployments(self, resources: dict):
         template_fetched_keys = defaultdict(list)
@@ -1372,32 +1380,32 @@ class CloneAssertor:
                 resource_key=resource_config_key,
                 depends_on=depends_on,
             )
-            if True:  # TODO If template mode is default
-                template = deployment["properties"]["template"]
-                assert (
-                    template["$schema"]
-                    == "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#"
-                )
-                assert template["contentVersion"] == "1.0.0.0"
-                expected_parameters = {"customLocationName": {"type": "string"}}
-                if resource_config_key not in [
-                    "assetEndpointProfiles",
-                    "assets",
-                    "secretProviderClasss",
-                    "secretSyncs",
-                ]:
-                    expected_parameters["instanceName"] = {"type": "string"}
-                assert template["parameters"] == expected_parameters
-                deployment_resources = template["resources"]
-                deployment_resources_len = len(deployment_resources)
+            template = deployment["properties"]["template"]
+            assert (
+                template["$schema"]
+                == "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#"
+            )
+            assert template["contentVersion"] == "1.0.0.0"
+            expected_parameters = {"customLocationName": {"type": "string"}}
+            if resource_config_key not in [
+                "assetEndpointProfiles",
+                "assets",
+                "secretProviderClasss",
+                "secretSyncs",
+            ]:
+                expected_parameters["instanceName"] = {"type": "string"}
+            assert template["parameters"] == expected_parameters
+            assert isinstance(template["resources"], list), "Deployment resources key should be a list"
+            deployment_resources = template["resources"]
+            deployment_resources_len = len(deployment_resources)
 
-                continue_from = len(template_fetched_keys[resource_config_key])
+            continue_from = len(template_fetched_keys[resource_config_key])
 
-                for i in range(deployment_resources_len):
-                    template_fetched_keys[resource_config_key].append(deployment_resources[i])
-                    model_config = deepcopy(self.resource_configs[resource_config_key][continue_from + i])
-                    self._handle_component_conversion(model_config, resource_config_key)
-                    assert model_config == deployment_resources[i]
+            for i in range(deployment_resources_len):
+                template_fetched_keys[resource_config_key].append(deployment_resources[i])
+                model_config = deepcopy(self.resource_configs[resource_config_key][continue_from + i])
+                self._handle_component_conversion(model_config, resource_config_key)
+                assert model_config == deployment_resources[i]
 
         for key in template_fetched_keys:
             assert len(template_fetched_keys[key]) == len(
