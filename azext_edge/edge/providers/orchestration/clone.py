@@ -1224,13 +1224,13 @@ class TemplateContent:
             deployments = self._get_deployments(bundle_path.name, linked_base_uri)
 
         template_str = dumps(self.content, indent=2)
-        with open(file=f"{bundle_path}.{file_ext}", mode="w") as template_file:
+        with open(file=f"{bundle_path}.{file_ext}", mode="w", encoding="utf8") as template_file:
             template_file.write(template_str)
 
         if deployments:
             Path(bundle_path).mkdir(exist_ok=True)
             for deployment in deployments:
-                with open(file=f"{bundle_path.joinpath(deployment[0])}.{file_ext}", mode="w") as template_file:
+                with open(file=f"{bundle_path.joinpath(deployment[0])}.{file_ext}", mode="w", encoding="utf8") as template_file:
                     template_file.write(dumps(deployment[1], indent=2))
 
 

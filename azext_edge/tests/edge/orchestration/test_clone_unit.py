@@ -227,18 +227,19 @@ class CloneScenario:
             just_id=True,
         )
         if not cred_payload:
+            id_slug = generate_uuid()
             cred_payload = {
                 "value": [
                     {
                         "properties": {
-                            "issuer": f"https://oidcdiscovery-northamerica-endpoint-abcde.z01.azurefd.net/{generate_uuid()}/",
+                            "issuer": f"https://oidcdiscovery-northamerica-endpoint-abcde.z01.azurefd.net/{id_slug}/",
                             "subject": f"system:serviceaccount:azure-iot-operations:{SERVICE_ACCOUNT_DATAFLOW}",
                             "audiences": ["api://AzureADTokenExchange"],
                         },
                     },
                     {
                         "properties": {
-                            "issuer": f"https://oidcdiscovery-northamerica-endpoint-abcde.z01.azurefd.net/{generate_uuid()}/",
+                            "issuer": f"https://oidcdiscovery-northamerica-endpoint-abcde.z01.azurefd.net/{id_slug}/",
                             "subject": f"system:serviceaccount:azure-iot-operations:{SERVICE_ACCOUNT_SECRETSYNC}",
                             "audiences": ["api://AzureADTokenExchange"],
                         },
@@ -392,7 +393,7 @@ class CloneScenario:
         optional_kwargs = {}
         identity_map = {}
 
-        for i in range(self.add_resources_map.get("identities", 0)):
+        for _ in range(self.add_resources_map.get("identities", 0)):
             uami_map = get_uami_id_map(self.resource_group_name)
             self.uami_ids.append(next(iter(uami_map)))
             identity_map.update(uami_map)
@@ -443,7 +444,7 @@ class CloneScenario:
             resource_group_name=self.resource_group_name,
         )
         listeners = [mock_listener_record]
-        for i in range(self.add_resources_map.get("listeners", 0)):
+        for _ in range(self.add_resources_map.get("listeners", 0)):
             listeners.append(
                 get_mock_broker_listener_record(
                     listener_name=generate_random_string(),
@@ -475,7 +476,7 @@ class CloneScenario:
             resource_group_name=self.resource_group_name,
         )
         authns = [mock_authn_record]
-        for i in range(self.add_resources_map.get("authns", 0)):
+        for _ in range(self.add_resources_map.get("authns", 0)):
             authns.append(
                 get_mock_broker_authn_record(
                     authn_name=generate_random_string(),
@@ -501,7 +502,7 @@ class CloneScenario:
 
     def add_authzs(self: C):
         authzs = []
-        for i in range(self.add_resources_map.get("authzs", 0)):
+        for _ in range(self.add_resources_map.get("authzs", 0)):
             authzs.append(
                 get_mock_broker_authz_record(
                     authz_name=generate_random_string(),
@@ -532,7 +533,7 @@ class CloneScenario:
             resource_group_name=self.resource_group_name,
         )
         profiles = [mock_dataflow_profile_record]
-        for i in range(self.add_resources_map.get("dataflowProfiles", 0)):
+        for _ in range(self.add_resources_map.get("dataflowProfiles", 0)):
             profiles.append(
                 get_mock_dataflow_profile_record(
                     profile_name=generate_random_string(),
@@ -561,7 +562,7 @@ class CloneScenario:
             resource_group_name=self.resource_group_name,
         )
         endpoints = [mock_dataflow_endpoint_record]
-        for i in range(self.add_resources_map.get("dataflowEndpoints", 0)):
+        for _ in range(self.add_resources_map.get("dataflowEndpoints", 0)):
             endpoints.append(
                 get_mock_dataflow_endpoint_record(
                     dataflow_endpoint_name=generate_random_string(),
@@ -802,11 +803,10 @@ def test_clone_manager(
     }
     assert deploy_body_payload["properties"]["template"] == deploy_body_payload["properties"]["template"]
 
-    # Basic test. Need to expand in separate test.
     write_to = ["my", "clone", "path"]
     target_path = PurePath(*write_to)
     template_content.write(target_path)
-    mock_open_write.assert_called_once_with(file=f"{target_path}.json", mode="w")
+    mock_open_write.assert_called_once_with(file=f"{target_path}.json", mode="w", encoding="utf8")
     mock_open_write().write.assert_called_once_with(json.dumps(content, indent=2))
 
 
@@ -951,7 +951,7 @@ def test_clone_scale(
     write_to = ["my", "clone", "path"]
     target_path = PurePath(*write_to)
     template_content.write(target_path)
-    mock_open_write.assert_called_once_with(file=f"{target_path}.json", mode="w")
+    mock_open_write.assert_called_once_with(file=f"{target_path}.json", mode="w", encoding="utf8")
     mock_open_write().write.assert_called_once_with(json.dumps(content, indent=2))
 
 
@@ -1007,7 +1007,7 @@ def test_clone_to_dir(
     template_content.write(target_path, template_mode=template_mode.value, **write_kwargs)
 
     if template_mode == TemplateMode.NESTED:
-        mock_open_write.assert_called_once_with(file=f"{target_path}.json", mode="w")
+        mock_open_write.assert_called_once_with(file=f"{target_path}.json", mode="w", encoding="utf8")
         mock_open_write().write.assert_called_once_with(json.dumps(content, indent=2))
 
     if template_mode == TemplateMode.LINKED:
@@ -1016,6 +1016,7 @@ def test_clone_to_dir(
         assert mock_open_write.call_args_list[0].kwargs == {
             "file": f"{target_path}.json",
             "mode": "w",
+            "encoding": "utf8",
         }
         root_content = json.loads(mock_open_write().write.call_args_list[0].args[0])
         asset_keys = [key for key in root_content["resources"] if "asset" in key]
@@ -1034,12 +1035,14 @@ def test_clone_to_dir(
             assert mock_open_write.call_args_list[i + 1].kwargs == {
                 "file": f"{target_path.joinpath(f'assetendpointprofiles_{i+1}')}.json",
                 "mode": "w",
+                "encoding": "utf8",
             }
         asset_pages = math.ceil(add_assets / DEPLOYMENT_CHUNK_LEN)
         for i in range(asset_pages):
             assert mock_open_write.call_args_list[aep_pages + 1 + i].kwargs == {
                 "file": f"{target_path.joinpath(f'assets_{i+1}')}.json",
                 "mode": "w",
+                "encoding": "utf8",
             }
 
 
@@ -1363,9 +1366,9 @@ class CloneAssertor:
             "parameters('principalId'), resourceGroup().id)]"
         )
         assert sr_ra_def["scope"] == "[parameters('schemaRegistryId')]"
-        assert (
-            sr_ra_def["properties"]["roleDefinitionId"]
-            == "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', 'b24988ac-6180-42a0-ab88-20f7382dd24c')]"
+        assert sr_ra_def["properties"]["roleDefinitionId"] == (
+            "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', "
+            "'b24988ac-6180-42a0-ab88-20f7382dd24c')]"
         )
         assert sr_ra_def["properties"]["principalId"] == "[parameters('principalId')]"
         assert sr_ra_def["properties"]["principalType"] == "ServicePrincipal"
@@ -1445,7 +1448,8 @@ class CloneAssertor:
                         )
                     elif dep in chunks_map:
                         depends_on.append(
-                            f"[resourceId('Microsoft.Resources/deployments', concat(parameters('resourceSlug'), '_{dep}_{chunks_map[dep]}'))]"
+                            "[resourceId('Microsoft.Resources/deployments', "
+                            f"concat(parameters('resourceSlug'), '_{dep}_{chunks_map[dep]}'))]"
                         )
             elif plural in broker_related:
                 depends_on.append(

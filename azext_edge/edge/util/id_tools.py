@@ -59,7 +59,7 @@ def parse_resource_id(rid) -> Dict[str, str]:
         result["last_child_num"] = count + 1 if isinstance(count, int) else None
         result = _populate_alternate_kwargs(result)
     else:
-        result = dict(name=rid)
+        result = {"name": rid}
     return {key: value for key, value in result.items() if value is not None}
 
 

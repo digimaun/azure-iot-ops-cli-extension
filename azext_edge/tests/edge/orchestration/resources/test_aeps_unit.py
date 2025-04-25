@@ -30,13 +30,11 @@ def get_mock_aep_record(aep_name: str, resource_group_name: str, properties: Opt
         "uuid": "54bde3af-30a7-4c4c-b517-4197b9d76475",
         "targetAddress": "opc.tcp://opcplc-000000.azure-iot-operations:50000",
         "endpointProfileType": "Microsoft.OpcUa",
-        "authentication": {
-            "method": "Anonymous"
-        },
+        "authentication": {"method": "Anonymous"},
         "additionalConfiguration": "{}",
-        "provisioningState": "Succeeded"
+        "provisioningState": "Succeeded",
     }
-    
+
     return get_mock_resource(
         name=aep_name,
         resource_path=f"/assetEndpointProfiles/{aep_name}",
