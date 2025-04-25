@@ -463,12 +463,13 @@ class InstanceRestore:
             for i in range(total_pages):
                 status = f"Initiating {deployment_name} {i+1}/{total_pages}"
                 console.update(status=status)
+                page = f"_{i+1}" if total_pages > 1 else ""
                 poller = self._deploy_template(
                     content=deployment_work[i],
                     parameters=parameters,
-                    deployment_name=f"{deployment_name}_{i+1}",
+                    deployment_name=f"{deployment_name}{page}",
                 )
-                deployment_link = self._get_deployment_link(deployment_name=f"{deployment_name}_{i+1}")
+                deployment_link = self._get_deployment_link(deployment_name=f"{deployment_name}{page}")
                 DEFAULT_CONSOLE.print(
                     f"->[link={deployment_link}]Link to {self.cluster_name} deployment {i+1}/{total_pages}[/link]",
                     highlight=False,

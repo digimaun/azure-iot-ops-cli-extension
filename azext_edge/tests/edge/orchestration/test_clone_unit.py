@@ -33,6 +33,7 @@ from azext_edge.edge.providers.orchestration.clone import (
     SERVICE_ACCOUNT_SECRETSYNC,
     CloneManager,
     InstanceRestore,
+    TemplateMode,
     VersionGuru,
     default_bundle_name,
     get_fc_name,
@@ -131,10 +132,17 @@ def mock_open_write(mocker):
     yield patched
 
 
-def get_deploy_url(cluster_sub_id: str, cluster_rg: str, deployment_name: str, page_num: int = 1) -> str:
+@pytest.fixture
+def mock_pathlib_path(mocker):
+    patched = mocker.patch("azext_edge.edge.providers.orchestration.clone.Path")
+    yield patched
+
+
+def get_deploy_url(cluster_sub_id: str, cluster_rg: str, deployment_name: str, page_num: Optional[int] = 1) -> str:
+    page_num = "" if not page_num else f"_{page_num}"
     return (
         f"{BASE_URL}/subscriptions/{cluster_sub_id}/resourcegroups/{cluster_rg}/providers"
-        f"/Microsoft.Resources/deployments/{deployment_name}_{page_num}?api-version=2024-03-01"
+        f"/Microsoft.Resources/deployments/{deployment_name}{page_num}?api-version=2024-03-01"
     )
 
 
@@ -307,7 +315,7 @@ class CloneScenario:
                     cluster_sub_id=cluster_sub_id,
                     cluster_rg=cluster_rg,
                     deployment_name=deployment_name,
-                    page_num=i + 1,
+                    page_num=i + 1 if content_len > 1 else None,
                 ),
                 json={},
                 status=200,
@@ -601,7 +609,6 @@ class CloneScenario:
                 content_type="application/json",
             )
             dataflows.extend(per_profile)
-
         self.resource_configs["dataflows"] = dataflows
 
     def add_secretsync_spcs(self: C):
@@ -851,6 +858,177 @@ def test_clone_instance_compat(
     template_content = clone_state.get_content()
     content = template_content.content
     CloneAssertor(clone_scenario).assert_content(content)
+
+
+LOAD_VALUE = 1000
+
+
+@pytest.mark.parametrize("add_dataflows", [200])  # total=len(dataflows)*len(profiles)+1
+@pytest.mark.parametrize("add_dataflow_endpoints", [LOAD_VALUE])
+@pytest.mark.parametrize("add_dataflow_profiles", [4])
+@pytest.mark.parametrize("add_authzs", [LOAD_VALUE])
+@pytest.mark.parametrize("add_authns", [LOAD_VALUE])
+@pytest.mark.parametrize("add_listeners", [LOAD_VALUE])
+@pytest.mark.parametrize("add_aeps", [LOAD_VALUE])
+@pytest.mark.parametrize("add_assets", [LOAD_VALUE])
+@pytest.mark.parametrize("add_secretsyncs", [10])
+@pytest.mark.parametrize("add_spcs", [10])
+@pytest.mark.parametrize("add_identities", [10])
+@pytest.mark.parametrize("clone_scenario", [CloneScenario()])
+def test_clone_scale(
+    mocked_cmd: Mock,
+    mocked_responses: responses,
+    clone_scenario: CloneScenario,
+    mock_open_write: Mock,
+    add_listeners: int,
+    add_authns: int,
+    add_authzs: int,
+    add_dataflow_profiles: int,
+    add_dataflow_endpoints: int,
+    add_dataflows: int,
+    add_aeps: int,
+    add_assets: int,
+    add_spcs: int,
+    add_secretsyncs: int,
+    add_identities: int,
+):
+    model_cluster_name = generate_random_string()
+    model_instance_name = generate_random_string()
+    model_resource_group_name = generate_random_string()
+    add_resources_map = {
+        "listeners": add_listeners,
+        "authns": add_authns,
+        "authzs": add_authzs,
+        "dataflowProfiles": add_dataflow_profiles,
+        "dataflowEndpoints": add_dataflow_endpoints,
+        "dataflows": add_dataflows,
+        "aeps": add_aeps,
+        "assets": add_assets,
+        "spcs": add_spcs,
+        "secretsyncs": add_secretsyncs,
+        "identities": add_identities,
+    }
+
+    clone_scenario.bootstrap(
+        mocked_responses,
+        resource_group_name=model_resource_group_name,
+        instance_name=model_instance_name,
+        cluster_name=model_cluster_name,
+        add_resources_map=add_resources_map,
+    )
+
+    clone_manager = CloneManager(
+        cmd=mocked_cmd,
+        resource_group_name=model_resource_group_name,
+        instance_name=model_instance_name,
+        no_progress=True,
+    )
+    clone_state = clone_manager.analyze_cluster()
+    template_content = clone_state.get_content()
+    content = template_content.content
+
+    CloneAssertor(clone_scenario).assert_content(content)
+
+    to_instance_name = generate_random_string()
+    deploy_responses, to_cluster_id = clone_scenario.wrap_cluster_deploy()
+    parsed_cluster_id = parse_resource_id(to_cluster_id)
+
+    restore_client: InstanceRestore = clone_state.get_restore_client(parsed_cluster_id=parsed_cluster_id)
+    restore_client.deploy(instance_name=to_instance_name)
+    deploy_body_payload = json.loads(deploy_responses[0].calls[0].request.body)
+
+    assert deploy_body_payload["properties"]["mode"] == "Incremental"
+    assert deploy_body_payload["properties"]["parameters"] == {
+        "clusterName": {"value": parsed_cluster_id["name"]},
+        "instanceName": {"value": to_instance_name},
+    }
+    assert deploy_body_payload["properties"]["template"] == deploy_body_payload["properties"]["template"]
+
+    # Basic test. Need to expand in separate test.
+    write_to = ["my", "clone", "path"]
+    target_path = PurePath(*write_to)
+    template_content.write(target_path)
+    mock_open_write.assert_called_once_with(file=f"{target_path}.json", mode="w")
+    mock_open_write().write.assert_called_once_with(json.dumps(content, indent=2))
+
+
+@pytest.mark.parametrize("linked_base_uri", [None, f"https://{generate_uuid()}.test/"])
+@pytest.mark.parametrize("template_mode", [TemplateMode.NESTED.value, TemplateMode.LINKED.value])
+@pytest.mark.parametrize("add_aeps", [100, LOAD_VALUE])
+@pytest.mark.parametrize("add_assets", [100, LOAD_VALUE])
+@pytest.mark.parametrize("clone_scenario", [CloneScenario()])
+def test_clone_to_dir(
+    mocked_cmd: Mock,
+    mocked_responses: responses,
+    clone_scenario: CloneScenario,
+    mock_open_write: Mock,
+    add_aeps: int,
+    add_assets: int,
+    template_mode: str,
+    linked_base_uri: str,
+    mock_pathlib_path: Mock,
+):
+    model_cluster_name = generate_random_string()
+    model_instance_name = generate_random_string()
+    model_resource_group_name = generate_random_string()
+    add_resources_map = {
+        "aeps": add_aeps,
+        "assets": add_assets,
+    }
+
+    clone_scenario.bootstrap(
+        mocked_responses,
+        resource_group_name=model_resource_group_name,
+        instance_name=model_instance_name,
+        cluster_name=model_cluster_name,
+        add_resources_map=add_resources_map,
+    )
+
+    clone_manager = CloneManager(
+        cmd=mocked_cmd,
+        resource_group_name=model_resource_group_name,
+        instance_name=model_instance_name,
+        no_progress=True,
+    )
+    clone_state = clone_manager.analyze_cluster()
+    template_content = clone_state.get_content()
+    content = template_content.content
+
+    CloneAssertor(clone_scenario).assert_content(content)
+
+    write_to = ["my", "clone", "path"]
+    target_path = PurePath(*write_to)
+    write_kwargs = {}
+    if template_mode == TemplateMode.LINKED.value:
+        write_kwargs["linked_base_uri"] = linked_base_uri
+    template_content.write(target_path, template_mode=template_mode, **write_kwargs)
+
+    if template_mode == TemplateMode.NESTED.value:
+        mock_open_write.assert_called_once_with(file=f"{target_path}.json", mode="w")
+        mock_open_write().write.assert_called_once_with(json.dumps(content, indent=2))
+
+    # TODO: assert content for linked mode
+    if template_mode == TemplateMode.LINKED.value:
+        assert mock_pathlib_path.mock_calls[0].args == (target_path,)
+        assert mock_pathlib_path.mock_calls[1].kwargs == {"exist_ok": True}
+        assert mock_open_write.call_args_list[0].kwargs == {
+            "file": f"{target_path}.json",
+            "mode": "w",
+        }
+        # TODO
+        # root_content = json.loads(mock_open_write().write.call_args_list[0].args[0])
+        aep_pages = math.ceil(add_aeps / DEPLOYMENT_CHUNK_LEN)
+        for i in range(aep_pages):
+            assert mock_open_write.call_args_list[i + 1].kwargs == {
+                "file": f"{target_path.joinpath(f'assetendpointprofiles_{i+1}')}.json",
+                "mode": "w",
+            }
+        asset_pages = math.ceil(add_assets / DEPLOYMENT_CHUNK_LEN)
+        for i in range(asset_pages):
+            assert mock_open_write.call_args_list[aep_pages + 1 + i].kwargs == {
+                "file": f"{target_path.joinpath(f'assets_{i+1}')}.json",
+                "mode": "w",
+            }
 
 
 EXPECTED_TEMPLATE_KEYS = {
@@ -1226,6 +1404,7 @@ class CloneAssertor:
                 self.resource_configs[key]
             ), f"Mismatch in resource count for {key}"
 
+    # TODO: rewrite this function.
     def _get_deployment_key_pairs(self) -> List[Tuple[str, str, List[str]]]:
         payload = []
         dep_map = {
@@ -1275,7 +1454,7 @@ class CloneAssertor:
                 if not self.resource_configs.get("secretProviderClasss"):
                     continue
 
-            for i in range(chunks):
+            for i in range(chunks_map[plural]):
                 paged_key = f"{plural}_{i + 1}"
                 payload.append((paged_key, plural, depends_on))
 
