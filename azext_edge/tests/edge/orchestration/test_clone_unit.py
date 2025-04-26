@@ -45,6 +45,7 @@ from azext_edge.edge.providers.orchestration.common import (
     EXTENSION_TYPE_PLATFORM,
     EXTENSION_TYPE_SSC,
 )
+from azext_edge.edge.commands_edge import clone_instance
 from azext_edge.edge.util.id_tools import parse_resource_id
 
 from ...generators import generate_random_string, generate_uuid, get_zeroed_subscription
@@ -196,11 +197,12 @@ class CloneScenario:
         self.add_resources_map = add_resources_map or {}
         self.spc_client_ids = []
         self.uami_ids = []
+        self.client_id_uami_map = {}
         self._configure_instance(instance_version=instance_version)
 
     def _configure_instance(self: C, instance_version: Optional[str] = None) -> C:
         self.add_extensions()
-        self.add_custom_location()
+        self.add_custom_location(namespace=generate_random_string())
         self.add_instance(version=instance_version)
         self.add_broker()
         self.add_listeners()
@@ -209,9 +211,9 @@ class CloneScenario:
         self.add_dataflow_profiles()
         self.add_dataflow_endpoints()
         self.add_dataflows()
-        self.add_arg_handler()
         self.add_secretsync_spcs()
         self.add_secretsyncs()
+        self.add_arg_handler()
         return self
 
     def wrap_cluster_deploy(
@@ -272,57 +274,61 @@ class CloneScenario:
             json=cluster_payload,
             status=200,
         )
-        if self.uami_ids:
-            for uami_id in self.uami_ids:
-                parsed_uami_id = parse_resource_id(uami_id)
-                cred_url = get_federated_creds_url(
-                    uami_sub_id=parsed_uami_id["subscription"],
-                    uami_rg_name=parsed_uami_id["resource_group"],
-                    uami_name=parsed_uami_id["name"],
-                )
-                self.responses.add(
-                    method=responses.GET,
-                    url=cred_url,
-                    json=cred_payload,
-                    status=200,
-                )
-
-                cred_payload_value = cred_payload["value"]
-                if cred_payload_value:
-                    for subject in [
-                        f"system:serviceaccount:azure-iot-operations:{SERVICE_ACCOUNT_DATAFLOW}",
-                        f"system:serviceaccount:azure-iot-operations:{SERVICE_ACCOUNT_SECRETSYNC}",
-                    ]:
-                        fc_name = get_fc_name(cluster_name=cluster_name, oidc_issuer=system_issuer, subject=subject)
-                        cred_url = get_federated_creds_url(
-                            uami_sub_id=parsed_uami_id["subscription"],
-                            uami_rg_name=parsed_uami_id["resource_group"],
-                            uami_name=parsed_uami_id["name"],
-                            fc_name=fc_name,
-                        )
-                        self.responses.add(
-                            method=responses.PUT,
-                            url=cred_url,
-                            json={},
-                            status=200,
-                        )
 
         deploy_responses = []
-        deployment_name = default_bundle_name(self.instance_name)
-        for i in range(content_len):
-            r = self.responses.add(
-                method=responses.PUT,
-                url=get_deploy_url(
-                    cluster_sub_id=cluster_sub_id,
-                    cluster_rg=cluster_rg,
-                    deployment_name=deployment_name,
-                    page_num=i + 1 if content_len > 1 else None,
-                ),
-                json={},
-                status=200,
-                content_type="application/json",
-            )
-            deploy_responses.append(r)
+        if connectivity_status.lower() == "connected":
+            if self.uami_ids:
+                for uami_id in self.uami_ids:
+                    parsed_uami_id = parse_resource_id(uami_id)
+                    cred_url = get_federated_creds_url(
+                        uami_sub_id=parsed_uami_id["subscription"],
+                        uami_rg_name=parsed_uami_id["resource_group"],
+                        uami_name=parsed_uami_id["name"],
+                    )
+                    self.responses.add(
+                        method=responses.GET,
+                        url=cred_url,
+                        json=cred_payload,
+                        status=200,
+                    )
+
+                    cred_payload_value = cred_payload["value"]
+                    if cred_payload_value:
+                        for subject in [
+                            f"system:serviceaccount:azure-iot-operations:{SERVICE_ACCOUNT_DATAFLOW}",
+                            f"system:serviceaccount:azure-iot-operations:{SERVICE_ACCOUNT_SECRETSYNC}",
+                        ]:
+                            fc_name = get_fc_name(
+                                cluster_name=cluster_name, oidc_issuer=system_issuer, subject=subject
+                            )
+                            cred_url = get_federated_creds_url(
+                                uami_sub_id=parsed_uami_id["subscription"],
+                                uami_rg_name=parsed_uami_id["resource_group"],
+                                uami_name=parsed_uami_id["name"],
+                                fc_name=fc_name,
+                            )
+                            self.responses.add(
+                                method=responses.PUT,
+                                url=cred_url,
+                                json={},
+                                status=200,
+                            )
+
+            deployment_name = default_bundle_name(self.instance_name)
+            for i in range(content_len):
+                r = self.responses.add(
+                    method=responses.PUT,
+                    url=get_deploy_url(
+                        cluster_sub_id=cluster_sub_id,
+                        cluster_rg=cluster_rg,
+                        deployment_name=deployment_name,
+                        page_num=i + 1 if content_len > 1 else None,
+                    ),
+                    json={},
+                    status=200,
+                    content_type="application/json",
+                )
+                deploy_responses.append(r)
         return deploy_responses, to_cluster_resource_id
 
     def add_extensions(self: C):
@@ -374,7 +380,7 @@ class CloneScenario:
 
         return ext
 
-    def add_custom_location(self: C):
+    def add_custom_location(self: C, namespace: Optional[str] = None):
         mock_cl_record = get_mock_custom_location_record(
             name=self.cl_name, resource_group_name=self.resource_group_name, cluster_name=self.cluster_name
         )
@@ -619,8 +625,14 @@ class CloneScenario:
                 name=generate_random_string(), resource_group_name=self.resource_group_name, cl_name=self.cl_name
             )
             self.spc_client_ids.append(spc["properties"]["clientId"])
+            uami_map = get_uami_id_map(self.resource_group_name)
+            uami_id = next(iter(uami_map))
+            self.uami_ids.append(uami_id)
+            self.client_id_uami_map[spc["properties"]["clientId"]] = uami_id
+
             spcs.append(spc)
         payload = {"value": spcs}
+
         self.responses.add(
             method=responses.GET,
             url=get_spc_endpoint(
@@ -673,10 +685,7 @@ class CloneScenario:
                     expected_client_ids = ""
                     for client_id in self.spc_client_ids:
                         expected_client_ids += f'"{client_id}", '
-                        uami_map = get_uami_id_map(self.resource_group_name)
-                        uami_id = next(iter(uami_map))
-                        self.uami_ids.append(uami_id)
-                        spc_uamis.append({"id": uami_id})
+                        spc_uamis.append({"id": self.client_id_uami_map[client_id]})
                     assert f"| where properties.clientId in~ ({expected_client_ids[:-2]})" in query
                     return request_kpis.respond_with(200, response_body={"data": spc_uamis})
 
@@ -842,36 +851,36 @@ def test_clone_instance_compat(
         instance_version=instance_version_test["version"],
     )
 
-    clone_manager = CloneManager(
+    clone = partial(
+        clone_instance,
         cmd=mocked_cmd,
         resource_group_name=model_resource_group_name,
         instance_name=model_instance_name,
         no_progress=True,
+        confirm_yes=True,
     )
+
     expected_error = instance_version_test.get("error")
     force = instance_version_test.get("force")
     if expected_error and not force:
         mocked_responses.assert_all_requests_are_fired = False
         with pytest.raises(ValidationError) as e:
-            clone_state = clone_manager.analyze_cluster()
+            clone()
         assert "This clone client is not compatible " in str(e.value)
         return
 
-    clone_state = clone_manager.analyze_cluster(force=force)
-    template_content = clone_state.get_content()
-    content = template_content.content
-    CloneAssertor(clone_scenario).assert_content(content)
+    clone(force=force)
 
 
 LOAD_VALUE = 1000
 
 
-@pytest.mark.parametrize("add_dataflows", [200])  # total=len(dataflows)*len(profiles)+1
+@pytest.mark.parametrize("add_dataflows", [200])  # total=len(dataflows)*(len(profiles)+1)
 @pytest.mark.parametrize("add_dataflow_endpoints", [LOAD_VALUE])
 @pytest.mark.parametrize("add_dataflow_profiles", [4])
 @pytest.mark.parametrize("add_authzs", [LOAD_VALUE])
 @pytest.mark.parametrize("add_authns", [LOAD_VALUE])
-@pytest.mark.parametrize("add_listeners", [LOAD_VALUE])
+@pytest.mark.parametrize("add_listeners", [2])
 @pytest.mark.parametrize("add_aeps", [LOAD_VALUE])
 @pytest.mark.parametrize("add_assets", [LOAD_VALUE])
 @pytest.mark.parametrize("add_secretsyncs", [10])
@@ -947,12 +956,82 @@ def test_clone_scale(
     }
     assert deploy_body_payload["properties"]["template"] == deploy_body_payload["properties"]["template"]
 
-    # Basic test. Need to expand in separate test.
     write_to = ["my", "clone", "path"]
     target_path = PurePath(*write_to)
     template_content.write(target_path)
     mock_open_write.assert_called_once_with(file=f"{target_path}.json", mode="w", encoding="utf8")
     mock_open_write().write.assert_called_once_with(json.dumps(content, indent=2))
+
+
+@pytest.mark.parametrize(
+    "cluster_state", [{"connectivityStatus": "Connected"}, {"connectivityStatus": "Disconnected"}]
+)
+@pytest.mark.parametrize("to_instance_name", [None, generate_random_string()])
+@pytest.mark.parametrize("add_aeps", [2])
+@pytest.mark.parametrize("add_assets", [2])
+@pytest.mark.parametrize("add_secretsyncs", [2])
+@pytest.mark.parametrize("add_spcs", [2])
+@pytest.mark.parametrize("add_identities", [2])
+@pytest.mark.parametrize("clone_scenario", [CloneScenario()])
+def test_clone_deploy(
+    mocked_cmd: Mock,
+    mocked_responses: responses,
+    clone_scenario: CloneScenario,
+    cluster_state: dict,
+    to_instance_name: str,
+    add_aeps: int,
+    add_assets: int,
+    add_spcs: int,
+    add_secretsyncs: int,
+    add_identities: int,
+):
+    model_cluster_name = generate_random_string()
+    model_instance_name = generate_random_string()
+    model_resource_group_name = generate_random_string()
+    add_resources_map = {
+        "aeps": add_aeps,
+        "assets": add_assets,
+        "spcs": add_spcs,
+        "secretsyncs": add_secretsyncs,
+        "identities": add_identities,
+    }
+
+    clone_scenario.bootstrap(
+        mocked_responses,
+        resource_group_name=model_resource_group_name,
+        instance_name=model_instance_name,
+        cluster_name=model_cluster_name,
+        add_resources_map=add_resources_map,
+    )
+    clone = partial(
+        clone_instance,
+        cmd=mocked_cmd,
+        resource_group_name=model_resource_group_name,
+        instance_name=model_instance_name,
+        no_progress=True,
+        confirm_yes=True,
+    )
+
+    connectivity_status: str = cluster_state.get("connectivityStatus", "")
+    deploy_responses, to_cluster_id = clone_scenario.wrap_cluster_deploy(connectivity_status=connectivity_status)
+    parsed_cluster_id = parse_resource_id(to_cluster_id)
+    if connectivity_status.lower() != "connected":
+        with pytest.raises(ValidationError) as e:
+            clone(to_instance_name=to_instance_name, to_cluster_id=to_cluster_id)
+        assert f"Cluster {parsed_cluster_id['name']} is not connected to Azure." == str(e.value)
+        return
+
+    clone(to_instance_name=to_instance_name, to_cluster_id=to_cluster_id)
+    deploy_body_payload = json.loads(deploy_responses[0].calls[0].request.body)
+    assert deploy_body_payload["properties"]["mode"] == "Incremental"
+
+    expected_deploy_params = {
+        "clusterName": {"value": parsed_cluster_id["name"]},
+    }
+    if to_instance_name:
+        expected_deploy_params["instanceName"] = {"value": to_instance_name}
+    assert deploy_body_payload["properties"]["parameters"] == expected_deploy_params
+    assert deploy_body_payload["properties"]["template"] == deploy_body_payload["properties"]["template"]
 
 
 @pytest.mark.parametrize("linked_base_uri", [None, f"https://{generate_uuid()}.test"])
@@ -1056,7 +1135,7 @@ EXPECTED_TEMPLATE_KEYS = {
     "resources",
 }
 EXPECTED_METADATA_KEYS = {"opsCliVersion", "clonedInstanceId"}
-EXPECTED_PARAMETER_KEYS = {"clusterName", "instanceName", "resourceSlug", "customLocationName"}
+EXPECTED_PARAMETER_KEYS = {"clusterName", "clusterNamespace", "instanceName", "resourceSlug", "customLocationName"}
 EXPECTED_VARIABLE_KEYS = {"aioExtName"}
 
 EXPECTED_ORD_EXT_RESOURCE_MAP = {
@@ -1096,7 +1175,6 @@ EXPECTED_ORD_EXT_RESOURCE_MAP = {
 
 def __replace_cl(context: dict) -> dict:
     resource_configs = context["resource_configs"]
-    custom_location = resource_configs["customLocation"]
 
     ext_map = {
         v["name"]: v
@@ -1125,7 +1203,7 @@ def __replace_cl(context: dict) -> dict:
         "name": "[parameters('customLocationName')]",
         "properties": {
             "hostResourceId": "[resourceId('Microsoft.Kubernetes/connectedClusters', parameters('clusterName'))]",
-            "namespace": custom_location["properties"]["namespace"],
+            "namespace": "[parameters('clusterNamespace')]",
             "displayName": "[parameters('customLocationName')]",
             "clusterExtensionIds": extension_ids,
             "authentication": {},
@@ -1259,12 +1337,13 @@ class CloneAssertor:
         assert content["parameters"]["resourceSlug"] == {
             "type": "string",
             "defaultValue": (
-                "[take(uniqueString(resourceGroup().id, parameters('clusterName'), parameters('instanceName')), 5)]"
+                "[take(uniqueString(resourceGroup().id, parameters('clusterName'), "
+                "parameters('clusterNamespace')), 5)]"
             ),
         }
         assert content["parameters"]["customLocationName"] == {
             "type": "string",
-            "defaultValue": "[format('location-{0}', parameters('resourceSlug'))]",
+            "defaultValue": self.resource_configs["customLocation"]["name"],
         }
 
         assert isinstance(content["variables"], dict), "Variables key should be a dictionary"

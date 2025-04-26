@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING, Any, Dict, Iterable, List, Optional, Tuple, Un
 from uuid import uuid4
 
 from azure.cli.core.azclierror import ValidationError
+from azure.core.exceptions import HttpResponseError
 from knack.log import get_logger
 from packaging.version import parse as parse_version
 from rich.console import Console
@@ -100,6 +101,7 @@ class StateResourceKey(Enum):
 class TemplateParams(Enum):
     INSTANCE_NAME = "instanceName"
     CLUSTER_NAME = "clusterName"
+    CLUSTER_NAMESPACE = "clusterNamespace"
     CUSTOM_LOCATION_NAME = "customLocationName"
     SUBSCRIPTION = "subscription"
     RESOURCEGROUP = "resourceGroup"
@@ -112,6 +114,7 @@ TEMPLATE_EXPRESSION_MAP = {
     "instanceName": f"[parameters('{TemplateParams.INSTANCE_NAME.value}')]",
     "instanceNestedName": (f"[concat(parameters('{TemplateParams.INSTANCE_NAME.value}'), " "'{}')]"),
     "clusterName": f"[parameters('{TemplateParams.CLUSTER_NAME.value}')]",
+    "clusterNamespace": f"[parameters('{TemplateParams.CLUSTER_NAMESPACE.value}')]",
     "clusterId": (
         "[resourceId('Microsoft.Kubernetes/connectedClusters', " f"parameters('{TemplateParams.CLUSTER_NAME.value}'))]"
     ),
@@ -419,22 +422,26 @@ class InstanceRestore:
             for exp_cred in expected_creds:
                 if exp_cred not in cred_map and exp_cred[1] in cluster_svc_acct_map:
                     subject = f"system:serviceaccount:{self.namespace}:{exp_cred[1]}"
-                    msi_client.federated_identity_credentials.create_or_update(
-                        resource_group_name=parsed_uami_id["resource_group"],
-                        resource_name=parsed_uami_id["name"],
-                        federated_identity_credential_resource_name=get_fc_name(
-                            cluster_name=self.cluster_name,
-                            oidc_issuer=oidc_issuer,
-                            subject=subject,
-                        ),
-                        parameters={
-                            "properties": {
-                                "subject": subject,
-                                "audiences": ["api://AzureADTokenExchange"],
-                                "issuer": oidc_issuer,
-                            }
-                        },
-                    )
+                    try:
+                        # Federate with best attempt.
+                        msi_client.federated_identity_credentials.create_or_update(
+                            resource_group_name=parsed_uami_id["resource_group"],
+                            resource_name=parsed_uami_id["name"],
+                            federated_identity_credential_resource_name=get_fc_name(
+                                cluster_name=self.cluster_name,
+                                oidc_issuer=oidc_issuer,
+                                subject=subject,
+                            ),
+                            parameters={
+                                "properties": {
+                                    "subject": subject,
+                                    "audiences": ["api://AzureADTokenExchange"],
+                                    "issuer": oidc_issuer,
+                                }
+                            },
+                        )
+                    except HttpResponseError as e:
+                        logger.debug(e)
 
     def deploy(
         self,
@@ -731,6 +738,11 @@ class CloneManager:
     def _build_parameters(self):
         self.parameter_map.update(build_parameter(name=TemplateParams.CLUSTER_NAME.value))
         self.parameter_map.update(
+            build_parameter(
+                name=TemplateParams.CLUSTER_NAMESPACE.value, default=self.custom_location["properties"]["namespace"]
+            )
+        )
+        self.parameter_map.update(
             build_parameter(name=TemplateParams.INSTANCE_NAME.value, default=self.instance_record["name"])
         )
         self.parameter_map.update(
@@ -738,14 +750,14 @@ class CloneManager:
                 name=TemplateParams.RESOURCE_SLUG.value,
                 default=(
                     "[take(uniqueString(resourceGroup().id, "
-                    "parameters('clusterName'), parameters('instanceName')), 5)]"
+                    "parameters('clusterName'), parameters('clusterNamespace')), 5)]"
                 ),
             )
         )
         self.parameter_map.update(
             build_parameter(
                 name=TemplateParams.CUSTOM_LOCATION_NAME.value,
-                default="[format('location-{0}', parameters('resourceSlug'))]",
+                default=self.custom_location["name"],
             )
         )
 
@@ -813,6 +825,7 @@ class CloneManager:
         api_version = self.version_guru.get_instance_api()
         custom_location = deepcopy(self.custom_location)
         custom_location["properties"]["hostResourceId"] = TEMPLATE_EXPRESSION_MAP["clusterId"]
+        custom_location["properties"]["namespace"] = TEMPLATE_EXPRESSION_MAP["clusterNamespace"]
         custom_location["name"] = TEMPLATE_EXPRESSION_MAP["customLocationName"]
 
         cl_extension_ids = []
@@ -1230,7 +1243,9 @@ class TemplateContent:
         if deployments:
             Path(bundle_path).mkdir(exist_ok=True)
             for deployment in deployments:
-                with open(file=f"{bundle_path.joinpath(deployment[0])}.{file_ext}", mode="w", encoding="utf8") as template_file:
+                with open(
+                    file=f"{bundle_path.joinpath(deployment[0])}.{file_ext}", mode="w", encoding="utf8"
+                ) as template_file:
                     template_file.write(dumps(deployment[1], indent=2))
 
 
