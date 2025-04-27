@@ -293,10 +293,11 @@ class CloneScenario:
                     )
 
                     cred_payload_value = cred_payload["value"]
+                    namespace = self.resource_configs['customLocation']["properties"]["namespace"]
                     if cred_payload_value:
                         for subject in [
-                            f"system:serviceaccount:azure-iot-operations:{SERVICE_ACCOUNT_DATAFLOW}",
-                            f"system:serviceaccount:azure-iot-operations:{SERVICE_ACCOUNT_SECRETSYNC}",
+                            f"system:serviceaccount:{namespace}:{SERVICE_ACCOUNT_DATAFLOW}",
+                            f"system:serviceaccount:{namespace}:{SERVICE_ACCOUNT_SECRETSYNC}",
                         ]:
                             fc_name = get_fc_name(
                                 cluster_name=cluster_name, oidc_issuer=system_issuer, subject=subject
@@ -339,10 +340,14 @@ class CloneScenario:
         )
 
         extensions = []
+        extensions_name_map = {}
         for ext_type, ext_name in EXTENSIONS_TYPE_TO_NAME:
-            extensions.append(
-                self._create_extension(ext_type, ext_name, "1.0.0", "stable"),
-            )
+            record_name = ext_name
+            if ext_name == EXT_NAME_OPS:
+                record_name = f"{ext_name}-{generate_random_string()}"
+            ext = self._create_extension(ext_type=ext_type, ext_name=record_name, version="1.0.0", train="stable")
+            extensions.append(ext)
+            extensions_name_map[ext_name] = ext
 
         self.responses.add(
             method=responses.GET,
@@ -351,7 +356,7 @@ class CloneScenario:
             status=200,
             content_type="application/json",
         )
-        self.resource_configs["extensions"] = extensions
+        self.resource_configs["extensions"] = extensions_name_map
 
     def _create_extension(self, ext_type: str, ext_name: str, version: str, train: str) -> dict:
         ext = {
@@ -382,7 +387,11 @@ class CloneScenario:
 
     def add_custom_location(self: C, namespace: Optional[str] = None):
         mock_cl_record = get_mock_custom_location_record(
-            name=self.cl_name, resource_group_name=self.resource_group_name, cluster_name=self.cluster_name
+            name=self.cl_name,
+            resource_group_name=self.resource_group_name,
+            cluster_name=self.cluster_name,
+            namespace=namespace,
+            ops_extension_name=self.resource_configs["extensions"][EXT_NAME_OPS]["name"],
         )
         self.responses.add(
             method=responses.GET,
@@ -1131,12 +1140,17 @@ EXPECTED_TEMPLATE_KEYS = {
     "contentVersion",
     "metadata",
     "parameters",
-    "variables",
     "resources",
 }
 EXPECTED_METADATA_KEYS = {"opsCliVersion", "clonedInstanceId"}
-EXPECTED_PARAMETER_KEYS = {"clusterName", "clusterNamespace", "instanceName", "resourceSlug", "customLocationName"}
-EXPECTED_VARIABLE_KEYS = {"aioExtName"}
+EXPECTED_PARAMETER_KEYS = {
+    "clusterName",
+    "clusterNamespace",
+    "customLocationName",
+    "instanceName",
+    "opsExtensionName",
+    "resourceSlug",
+}
 
 EXPECTED_ORD_EXT_RESOURCE_MAP = {
     "platform": {
@@ -1161,7 +1175,7 @@ EXPECTED_ORD_EXT_RESOURCE_MAP = {
     },
     "iotOperations": {
         "replacements": {
-            "name": "[variables('aioExtName')]",
+            "name": "[parameters('opsExtensionName')]",
             "scope": "[resourceId('Microsoft.Kubernetes/connectedClusters', parameters('clusterName'))]",
             "apiVersion": "2023-05-01",
             "dependsOn": ["platform", "containerStorage", "secretStore"],
@@ -1176,18 +1190,16 @@ EXPECTED_ORD_EXT_RESOURCE_MAP = {
 def __replace_cl(context: dict) -> dict:
     resource_configs = context["resource_configs"]
 
-    ext_map = {
-        v["name"]: v
-        for v in resource_configs["extensions"]
-        if v["name"] in [EXT_NAME_PLAT, EXT_NAME_SSC, EXT_NAME_OPS]
-    }
     extension_ids = []
-    for ext_name in ext_map:
+    for ext_name in resource_configs["extensions"]:
+        if ext_name not in [EXT_NAME_PLAT, EXT_NAME_SSC, EXT_NAME_OPS]:
+            continue
+
         if ext_name == EXT_NAME_OPS:
             extension_ids.append(
                 (
                     "[concat(resourceId('Microsoft.Kubernetes/connectedClusters', parameters('clusterName')), "
-                    "'/providers/Microsoft.KubernetesConfiguration/extensions/', variables('aioExtName'))]"
+                    "'/providers/Microsoft.KubernetesConfiguration/extensions/', parameters('opsExtensionName'))]"
                 )
             )
         else:
@@ -1330,9 +1342,21 @@ class CloneAssertor:
         assert isinstance(content["parameters"], dict), "Parameters key should be a dictionary"
         assert set(content["parameters"].keys()) == EXPECTED_PARAMETER_KEYS, "Unexpected keys in parameters content"
         assert content["parameters"]["clusterName"] == {"type": "string"}
+        assert content["parameters"]["clusterNamespace"] == {
+            "type": "string",
+            "defaultValue": self.resource_configs["customLocation"]["properties"]["namespace"],
+        }
+        assert content["parameters"]["customLocationName"] == {
+            "type": "string",
+            "defaultValue": self.resource_configs["customLocation"]["name"],
+        }
         assert content["parameters"]["instanceName"] == {
             "type": "string",
             "defaultValue": self.clone_scenario.instance_name,
+        }
+        assert content["parameters"]["opsExtensionName"] == {
+            "type": "string",
+            "defaultValue": self.resource_configs["extensions"][EXT_NAME_OPS]["name"],
         }
         assert content["parameters"]["resourceSlug"] == {
             "type": "string",
@@ -1341,15 +1365,6 @@ class CloneAssertor:
                 "parameters('clusterNamespace')), 5)]"
             ),
         }
-        assert content["parameters"]["customLocationName"] == {
-            "type": "string",
-            "defaultValue": self.resource_configs["customLocation"]["name"],
-        }
-
-        assert isinstance(content["variables"], dict), "Variables key should be a dictionary"
-        assert set(content["variables"].keys()) == EXPECTED_VARIABLE_KEYS, "Unexpected keys in variables content"
-        assert content["variables"]["aioExtName"] == "[format('azure-iot-operations-{0}', parameters('resourceSlug'))]"
-
         self._assert_resources(content)
 
     def _assert_instance_api(self):
@@ -1377,9 +1392,10 @@ class CloneAssertor:
 
     def _assert_extensions(self, resources: dict):
         expected_ext_keys = list(EXPECTED_ORD_EXT_RESOURCE_MAP.keys())
+        extensions = list(self.resource_configs["extensions"].values())
         for i in range(len(expected_ext_keys)):
             key_name = expected_ext_keys[i]
-            extension_config: dict = deepcopy(self.resource_configs["extensions"][i])
+            extension_config: dict = deepcopy(extensions[i])
             expected_ext_meta: dict = EXPECTED_ORD_EXT_RESOURCE_MAP[key_name]
             clone_replacements = expected_ext_meta.get("replacements")
             if clone_replacements:

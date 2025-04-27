@@ -103,6 +103,7 @@ class TemplateParams(Enum):
     CLUSTER_NAME = "clusterName"
     CLUSTER_NAMESPACE = "clusterNamespace"
     CUSTOM_LOCATION_NAME = "customLocationName"
+    OPS_EXTENSION_NAME = "opsExtensionName"
     SUBSCRIPTION = "subscription"
     RESOURCEGROUP = "resourceGroup"
     SCHEMA_REGISTRY_ID = "schemaRegistryId"
@@ -128,6 +129,7 @@ TEMPLATE_EXPRESSION_MAP = {
         f"parameters('{TemplateParams.CLUSTER_NAME.value}')), "
         "'/providers/Microsoft.KubernetesConfiguration/extensions/{})]"
     ),
+    "opsExtensionName": f"[parameters('{TemplateParams.OPS_EXTENSION_NAME.value}')]",
     "schemaRegistryId": f"[parameters('{TemplateParams.SCHEMA_REGISTRY_ID.value}')]",
 }
 
@@ -165,6 +167,13 @@ def get_resource_id_by_parts(rtype: str, *args) -> str:
 
 def get_resource_id_by_param(rtype: str, param: TemplateParams) -> str:
     return f"[resourceId('{rtype}', parameters('{param.value}'))]"
+
+
+def get_ops_extension_name(extension_names: List[str]) -> Optional[str]:
+    for name in extension_names:
+        part = name.rsplit("/", 1)[-1]
+        if part.startswith("azure-iot-operations-") and not part.endswith("platform"):
+            return part
 
 
 class DeploymentContainer:
@@ -743,8 +752,24 @@ class CloneManager:
             )
         )
         self.parameter_map.update(
+            build_parameter(
+                name=TemplateParams.CUSTOM_LOCATION_NAME.value,
+                default=self.custom_location["name"],
+            )
+        )
+        self.parameter_map.update(
             build_parameter(name=TemplateParams.INSTANCE_NAME.value, default=self.instance_record["name"])
         )
+        self.parameter_map.update(
+            build_parameter(
+                name=TemplateParams.OPS_EXTENSION_NAME.value,
+                default=(
+                    get_ops_extension_name(self.custom_location["properties"].get("clusterExtensionIds", []))
+                    or "[format('azure-iot-operations-{0}', parameters('resourceSlug'))]"
+                ),
+            )
+        )
+
         self.parameter_map.update(
             build_parameter(
                 name=TemplateParams.RESOURCE_SLUG.value,
@@ -754,15 +779,9 @@ class CloneManager:
                 ),
             )
         )
-        self.parameter_map.update(
-            build_parameter(
-                name=TemplateParams.CUSTOM_LOCATION_NAME.value,
-                default=self.custom_location["name"],
-            )
-        )
 
     def _build_variables(self):
-        self.variable_map["aioExtName"] = "[format('azure-iot-operations-{0}', parameters('resourceSlug'))]"
+        pass
 
     def _build_metadata(self):
         self.metadata_map["opsCliVersion"] = CLI_VERSION
@@ -811,7 +830,7 @@ class CloneManager:
             depends_on = depends_on_map.get(extension_type)
             extension_map[extension_type]["scope"] = TEMPLATE_EXPRESSION_MAP["clusterId"]
             if extension_moniker == EXTENSION_TYPE_TO_MONIKER_MAP[EXTENSION_TYPE_OPS]:
-                extension_map[extension_type]["name"] = "[variables('aioExtName')]"
+                extension_map[extension_type]["name"] = TEMPLATE_EXPRESSION_MAP["opsExtensionName"]
 
             self._add_resource(
                 key=extension_moniker,
@@ -839,14 +858,16 @@ class CloneManager:
             if not ext_resource:
                 continue
             if moniker == EXTENSION_TYPE_TO_MONIKER_MAP[EXTENSION_TYPE_OPS]:
-                cl_extension_ids.append(TEMPLATE_EXPRESSION_MAP["extensionId"].format("', variables('aioExtName')"))
+                cl_extension_ids.append(
+                    TEMPLATE_EXPRESSION_MAP["extensionId"].format("', parameters('opsExtensionName')")
+                )
             else:
                 cl_extension_ids.append(
                     TEMPLATE_EXPRESSION_MAP["extensionId"].format(f"{ext_resource.resource_state['name']}'")
                 )
 
         custom_location["properties"]["clusterExtensionIds"] = cl_extension_ids
-        custom_location["properties"]["displayName"] = "[parameters('customLocationName')]"
+        custom_location["properties"]["displayName"] = TEMPLATE_EXPRESSION_MAP["customLocationName"]
 
         self._add_resource(
             key=StateResourceKey.CL,
