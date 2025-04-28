@@ -1146,9 +1146,6 @@ class CloneManager:
 
             for chunk in chunked_list_data:
                 symbolic_name, deployment_name = self.add_deployment_by_key(key)
-                # TODO Debug
-                # with open(f"./{symbolic_name}.json", mode="w") as myfile:
-                #     myfile.write(dumps(chunk))
 
                 deployment_container = DeploymentContainer(
                     name=f"[{deployment_name}]",
