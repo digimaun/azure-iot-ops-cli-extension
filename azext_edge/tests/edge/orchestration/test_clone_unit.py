@@ -220,7 +220,7 @@ class CloneScenario:
         self: C,
         content_len: int = 1,
         connectivity_status: str = "Connected",
-        cred_payload: Optional[dict] = None,
+        cred_state: Optional[dict] = None,
     ) -> Tuple[List[responses.BaseResponse], str]:
         to_cluster_resource_id = get_cluster_url(
             cluster_sub_id=generate_uuid(),
@@ -228,26 +228,21 @@ class CloneScenario:
             cluster_name=generate_random_string(),
             just_id=True,
         )
-        if not cred_payload:
-            id_slug = generate_uuid()
-            cred_payload = {
-                "value": [
-                    {
-                        "properties": {
-                            "issuer": f"https://oidcdiscovery-northamerica-endpoint-abcde.z01.azurefd.net/{id_slug}/",
-                            "subject": f"system:serviceaccount:azure-iot-operations:{SERVICE_ACCOUNT_DATAFLOW}",
-                            "audiences": ["api://AzureADTokenExchange"],
-                        },
+        if not cred_state:
+            cred_state = {"subjects": {SERVICE_ACCOUNT_DATAFLOW, SERVICE_ACCOUNT_SECRETSYNC}}
+        cred_subjects = cred_state.get("subjects", {})
+        cred_payload = {"value": []}
+        id_slug = generate_uuid()
+        for subject in cred_subjects:
+            cred_payload["value"].append(
+                {
+                    "properties": {
+                        "issuer": f"https://oidcdiscovery-northamerica-endpoint-abcde.z01.azurefd.net/{id_slug}/",
+                        "subject": f"system:serviceaccount:azure-iot-operations:{subject}",
+                        "audiences": ["api://AzureADTokenExchange"],
                     },
-                    {
-                        "properties": {
-                            "issuer": f"https://oidcdiscovery-northamerica-endpoint-abcde.z01.azurefd.net/{id_slug}/",
-                            "subject": f"system:serviceaccount:azure-iot-operations:{SERVICE_ACCOUNT_SECRETSYNC}",
-                            "audiences": ["api://AzureADTokenExchange"],
-                        },
-                    },
-                ]
-            }
+                }
+            )
 
         parsed_cluster_id = parse_resource_id(to_cluster_resource_id)
         cluster_sub_id = parsed_cluster_id["subscription"]
@@ -293,14 +288,12 @@ class CloneScenario:
                     )
 
                     cred_payload_value = cred_payload["value"]
-                    namespace = self.resource_configs['customLocation']["properties"]["namespace"]
+                    namespace = self.resource_configs["customLocation"]["properties"]["namespace"]
                     if cred_payload_value:
-                        for subject in [
-                            f"system:serviceaccount:{namespace}:{SERVICE_ACCOUNT_DATAFLOW}",
-                            f"system:serviceaccount:{namespace}:{SERVICE_ACCOUNT_SECRETSYNC}",
-                        ]:
+                        for subject in cred_subjects:
+                            qualified_subject = f"system:serviceaccount:{namespace}:{subject}"
                             fc_name = get_fc_name(
-                                cluster_name=cluster_name, oidc_issuer=system_issuer, subject=subject
+                                cluster_name=cluster_name, oidc_issuer=system_issuer, subject=qualified_subject
                             )
                             cred_url = get_federated_creds_url(
                                 uami_sub_id=parsed_uami_id["subscription"],
@@ -973,6 +966,15 @@ def test_clone_scale(
 
 
 @pytest.mark.parametrize(
+    "cred_state",
+    [
+        {"subjects": {}},
+        {"subjects": {SERVICE_ACCOUNT_SECRETSYNC}},
+        {"subjects": {SERVICE_ACCOUNT_DATAFLOW}},
+        {"subjects": {SERVICE_ACCOUNT_DATAFLOW, SERVICE_ACCOUNT_SECRETSYNC}},
+    ],
+)
+@pytest.mark.parametrize(
     "cluster_state", [{"connectivityStatus": "Connected"}, {"connectivityStatus": "Disconnected"}]
 )
 @pytest.mark.parametrize("to_instance_name", [None, generate_random_string()])
@@ -986,6 +988,7 @@ def test_clone_deploy(
     mocked_cmd: Mock,
     mocked_responses: responses,
     clone_scenario: CloneScenario,
+    cred_state: dict,
     cluster_state: dict,
     to_instance_name: str,
     add_aeps: int,
@@ -1022,7 +1025,9 @@ def test_clone_deploy(
     )
 
     connectivity_status: str = cluster_state.get("connectivityStatus", "")
-    deploy_responses, to_cluster_id = clone_scenario.wrap_cluster_deploy(connectivity_status=connectivity_status)
+    deploy_responses, to_cluster_id = clone_scenario.wrap_cluster_deploy(
+        connectivity_status=connectivity_status, cred_state=cred_state
+    )
     parsed_cluster_id = parse_resource_id(to_cluster_id)
     if connectivity_status.lower() != "connected":
         with pytest.raises(ValidationError) as e:
