@@ -2904,7 +2904,6 @@ def load_iotops_help():
             az iot ops clone -n myinstance -g myresourcegroup --to-dir . --no-progress -y
     """
 
-
     helps[
         "iot ops rsync"
     ] = """
@@ -2920,9 +2919,10 @@ def load_iotops_help():
         long-summary: |
           This operation will
           - Create two resource sync rules. One for instance contained resources and one for assets.
+          - Create a role assignment between the K8 Bridge service principal and the IoT Operations instance custom location.
 
         examples:
-        - name: Clone an instance to a desired connected cluster.
+        - name: Enable resource sync for the instance.
           text: >
-            az iot ops clone -n myinstance -g myresourcegroup --to-cluster-id $CLUSTER_RESOURCE_ID
+            az iot ops rsync enable -n myinstance -g myresourcegroup
     """
