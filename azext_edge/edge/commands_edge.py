@@ -453,23 +453,33 @@ def enable_rsync(
     resource_group_name: str,
     skip_role_assignments: Optional[bool] = None,
     custom_role_id: Optional[str] = None,
+    k8_bridge_oid: Optional[str] = None,
+    rule_ops_name: Optional[str] = None,
+    rule_adr_name: Optional[str] = None,
+    rule_ops_pri: Optional[int] = None,
+    rule_adr_pri: Optional[int] = None,
     **kwargs,
 ):
     from .providers.orchestration.resources import SyncRules
 
     return SyncRules(cmd=cmd, resource_group_name=resource_group_name, instance_name=instance_name).enable(
-        skip_role_assignments=skip_role_assignments, custom_role_id=custom_role_id, **kwargs
+        skip_role_assignments=skip_role_assignments,
+        custom_role_id=custom_role_id,
+        k8_bridge_oid=k8_bridge_oid,
+        rule_ops_name=rule_ops_name,
+        rule_adr_name=rule_adr_name,
+        rule_ops_pri=rule_ops_pri,
+        rule_adr_pri=rule_adr_pri,
+        **kwargs,
     )
 
 
-def disable_rsync(
-    cmd,
-    instance_name: str,
-    resource_group_name: str,
-):
+def disable_rsync(cmd, instance_name: str, resource_group_name: str, confirm_yes: Optional[bool] = None):
     from .providers.orchestration.resources import SyncRules
 
-    return SyncRules(cmd=cmd, resource_group_name=resource_group_name, instance_name=instance_name).disable()
+    return SyncRules(cmd=cmd, resource_group_name=resource_group_name, instance_name=instance_name).disable(
+        confirm_yes=confirm_yes
+    )
 
 
 def list_rsync(

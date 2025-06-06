@@ -4,7 +4,7 @@
 # Licensed under the MIT License. See License file in the project root for license information.
 # ----------------------------------------------------------------------------------------------
 
-from typing import TYPE_CHECKING, List, NamedTuple, Optional
+from typing import TYPE_CHECKING, List, NamedTuple, Optional, Set
 
 from azure.cli.core.azclierror import (
     AzureResponseError,
@@ -13,6 +13,7 @@ from knack.log import get_logger
 from rich.console import Console
 
 from ....util.az_client import get_extloc_mgmt_client, wait_for_terminal_states
+from ....util.common import should_continue_prompt
 from ....util.id_tools import parse_resource_id
 from ....util.queryable import Queryable
 from ..permissions import (
@@ -40,13 +41,28 @@ console = Console()
 class SyncRuleAttr(NamedTuple):
     provider: str
     priority: int
-    suffix: str
+    name: str
 
 
-SYNC_RULE_ATTRS = {
-    SyncRuleAttr(provider=ADR_PROVIDER, priority=200, suffix="-adr-sync"),
-    SyncRuleAttr(provider=OPS_PROVIDER, priority=400, suffix="-ops-sync"),
-}
+def get_sync_rule_attrs(
+    custom_location_name: str,
+    rule_ops_name: Optional[str] = None,
+    rule_adr_name: Optional[str] = None,
+    rule_ops_pri: Optional[int] = None,
+    rule_adr_pri: Optional[int] = None,
+) -> Set[SyncRuleAttr]:
+    return {
+        SyncRuleAttr(
+            provider=OPS_PROVIDER,
+            priority=rule_ops_pri or 400,
+            name=rule_ops_name or f"{custom_location_name}-ops-sync",
+        ),
+        SyncRuleAttr(
+            provider=ADR_PROVIDER,
+            priority=rule_adr_pri or 200,
+            name=rule_adr_name or f"{custom_location_name}-adr-sync",
+        ),
+    }
 
 
 class SyncRules(Queryable):
@@ -83,23 +99,27 @@ class SyncRules(Queryable):
         self,
         skip_role_assignments: Optional[bool] = None,
         custom_role_id: Optional[str] = None,
-        rule_name_ops: Optional[str] = None,
-        rule_name_adr: Optional[str] = None,
+        k8_bridge_oid: Optional[str] = None,
+        rule_ops_name: Optional[str] = None,
+        rule_adr_name: Optional[str] = None,
+        rule_ops_pri: Optional[int] = None,
+        rule_adr_pri: Optional[int] = None,
         **kwargs,
     ) -> List[dict]:
         with console.status("Working...") as c:
             pollers = []
-            cl_name = self.custom_location["name"]
-            for rule_attrs in SYNC_RULE_ATTRS:
-                rule_name = f"{cl_name}{rule_attrs.suffix}"
-                if rule_attrs.provider == OPS_PROVIDER and rule_name_ops:
-                    rule_name = rule_name_ops
-                if rule_attrs.provider == ADR_PROVIDER and rule_name_adr:
-                    rule_name = rule_name_adr
+            sync_rule_attrs = get_sync_rule_attrs(
+                custom_location_name=self.custom_location["name"],
+                rule_ops_name=rule_ops_name,
+                rule_adr_name=rule_adr_name,
+                rule_ops_pri=rule_ops_pri,
+                rule_adr_pri=rule_adr_pri,
+            )
+            for rule_attrs in sync_rule_attrs:
                 poller = self.ops.begin_create_or_update(
                     resource_group_name=self.resource_group_name,
                     resource_name=self.custom_location["name"],
-                    child_resource_name=rule_name,
+                    child_resource_name=rule_attrs.name,
                     parameters=self._get_enable_params(
                         provider_name=rule_attrs.provider, priority=rule_attrs.priority
                     ),
@@ -112,10 +132,13 @@ class SyncRules(Queryable):
                 target_role_def = custom_role_id or ROLE_DEF_FORMAT_STR.format(
                     subscription_id=self.default_subscription_id, role_id=KUBERNETES_ARC_CONTRIBUTOR_ROLE_ID
                 )
-                k8_bridge_sp_id = self.get_sp_id(K8_BRIDGE_APP_ID)
+                k8_bridge_sp_id = k8_bridge_oid or self.get_sp_id(K8_BRIDGE_APP_ID)
                 if not k8_bridge_sp_id:
                     c.stop()
-                    logger.warning("K8 Bridge service principal not found. Skipping role assignment.")
+                    logger.warning(
+                        "K8 Bridge service principal not found and not provided via parameter."
+                        "Skipping role assignment."
+                    )
                     return result
 
                 permission_manager = PermissionManager(self.default_subscription_id)
@@ -140,16 +163,22 @@ class SyncRules(Queryable):
 
             return result
 
-    def disable(self):
-        sync_rules = self.list()
+    def disable(self, confirm_yes: Optional[bool] = None) -> None:
+        if not should_continue_prompt(confirm_yes=confirm_yes):
+            return
+
+        sync_rules = list(self.list())
         if not sync_rules:
-            logger.warning(f"No sync rules found for instance '{self.instance_name}'.")
-        for rule in sync_rules:
-            self.ops.delete(
-                resource_group_name=self.resource_group_name,
-                resource_name=self.custom_location["name"],
-                child_resource_name=rule["name"],
-            )
+            logger.warning(f"No resource sync rules found for instance '{self.instance_name}'.")
+            return
+
+        with console.status("Working..."):
+            for rule in sync_rules:
+                self.ops.delete(
+                    resource_group_name=self.resource_group_name,
+                    resource_name=self.custom_location["name"],
+                    child_resource_name=rule["name"],
+                )
 
     def list(self) -> List[dict]:
         return self.ops.list_by_custom_location_id(
