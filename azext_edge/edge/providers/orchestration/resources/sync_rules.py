@@ -21,7 +21,7 @@ from ..permissions import (
     PrincipalType,
     get_ra_user_error_msg,
 )
-from ..resources import Instances
+from . import Instances
 
 if TYPE_CHECKING:
     from ....vendor.clients.extendedlocmgmt.operations import (
@@ -30,6 +30,8 @@ if TYPE_CHECKING:
 
 KUBERNETES_ARC_CONTRIBUTOR_ROLE_ID = "5d3f1697-4507-4d08-bb4a-477695db5f82"
 K8_BRIDGE_APP_ID = "319f651f-7ddb-4fc6-9857-7aef9250bd05"
+ADR_PROVIDER = "Microsoft.DeviceRegistry"
+OPS_PROVIDER = "Microsoft.IoTOperations"
 
 logger = get_logger(__name__)
 console = Console()
@@ -42,12 +44,12 @@ class SyncRuleAttr(NamedTuple):
 
 
 SYNC_RULE_ATTRS = {
-    SyncRuleAttr(provider="Microsoft.DeviceRegistry", priority=200, suffix="-adr-sync"),
-    SyncRuleAttr(provider="microsoft.iotoperations", priority=400, suffix="-ops-sync"),
+    SyncRuleAttr(provider=ADR_PROVIDER, priority=200, suffix="-adr-sync"),
+    SyncRuleAttr(provider=OPS_PROVIDER, priority=400, suffix="-ops-sync"),
 }
 
 
-class ResourceSync(Queryable):
+class SyncRules(Queryable):
     def __init__(self, cmd, resource_group_name: str, instance_name: str):
         super().__init__(cmd=cmd)
         self.resource_group_name = resource_group_name
@@ -81,22 +83,29 @@ class ResourceSync(Queryable):
         self,
         skip_role_assignments: Optional[bool] = None,
         custom_role_id: Optional[str] = None,
+        rule_name_ops: Optional[str] = None,
+        rule_name_adr: Optional[str] = None,
         **kwargs,
     ) -> List[dict]:
         with console.status("Working...") as c:
             pollers = []
             cl_name = self.custom_location["name"]
             for rule_attrs in SYNC_RULE_ATTRS:
+                rule_name = f"{cl_name}{rule_attrs.suffix}"
+                if rule_attrs.provider == OPS_PROVIDER and rule_name_ops:
+                    rule_name = rule_name_ops
+                if rule_attrs.provider == ADR_PROVIDER and rule_name_adr:
+                    rule_name = rule_name_adr
                 poller = self.ops.begin_create_or_update(
                     resource_group_name=self.resource_group_name,
                     resource_name=self.custom_location["name"],
-                    child_resource_name=f"{cl_name}{rule_attrs.suffix}",
+                    child_resource_name=rule_name,
                     parameters=self._get_enable_params(
                         provider_name=rule_attrs.provider, priority=rule_attrs.priority
                     ),
                 )
                 pollers.append(poller)
-            wait_for_terminal_states(**pollers, **kwargs)
+            wait_for_terminal_states(*pollers, **kwargs)
             result = [p.result() for p in pollers]
 
             if not skip_role_assignments:
@@ -120,7 +129,6 @@ class ResourceSync(Queryable):
                 except Exception as e:
                     c.stop()
                     raise AzureResponseError(
-                        # Add --skip-ra?
                         get_ra_user_error_msg(
                             error_str=str(e),
                             sp_name="K8 Bridge",
@@ -133,7 +141,18 @@ class ResourceSync(Queryable):
             return result
 
     def disable(self):
-        pass
+        sync_rules = self.list()
+        if not sync_rules:
+            logger.warning(f"No sync rules found for instance '{self.instance_name}'.")
+        for rule in sync_rules:
+            self.ops.delete(
+                resource_group_name=self.resource_group_name,
+                resource_name=self.custom_location["name"],
+                child_resource_name=rule["name"],
+            )
 
     def list(self) -> List[dict]:
-        return []
+        return self.ops.list_by_custom_location_id(
+            resource_group_name=self.resource_group_name,
+            resource_name=self.custom_location["name"],
+        )

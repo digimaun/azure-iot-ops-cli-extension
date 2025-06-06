@@ -451,10 +451,15 @@ def enable_rsync(
     cmd,
     instance_name: str,
     resource_group_name: str,
+    skip_role_assignments: Optional[bool] = None,
+    custom_role_id: Optional[str] = None,
+    **kwargs,
 ):
-    from .providers.orchestration.resource_sync import ResourceSync
+    from .providers.orchestration.resources import SyncRules
 
-    return ResourceSync(cmd=cmd, resource_group_name=resource_group_name, instance_name=instance_name).enable()
+    return SyncRules(cmd=cmd, resource_group_name=resource_group_name, instance_name=instance_name).enable(
+        skip_role_assignments=skip_role_assignments, custom_role_id=custom_role_id, **kwargs
+    )
 
 
 def disable_rsync(
@@ -462,9 +467,9 @@ def disable_rsync(
     instance_name: str,
     resource_group_name: str,
 ):
-    from .providers.orchestration.resource_sync import ResourceSync
+    from .providers.orchestration.resources import SyncRules
 
-    return ResourceSync(cmd=cmd, resource_group_name=resource_group_name, instance_name=instance_name).disable()
+    return SyncRules(cmd=cmd, resource_group_name=resource_group_name, instance_name=instance_name).disable()
 
 
 def list_rsync(
@@ -472,6 +477,6 @@ def list_rsync(
     instance_name: str,
     resource_group_name: str,
 ) -> List[dict]:
-    from .providers.orchestration.resource_sync import ResourceSync
+    from .providers.orchestration.resources import SyncRules
 
-    return ResourceSync(cmd=cmd, resource_group_name=resource_group_name, instance_name=instance_name).list()
+    return SyncRules(cmd=cmd, resource_group_name=resource_group_name, instance_name=instance_name).list()

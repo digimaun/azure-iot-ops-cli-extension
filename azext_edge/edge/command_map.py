@@ -45,6 +45,7 @@ def load_iotops_commands(self, _):
     ) as cmd_group:
         cmd_group.command("enable", "enable_rsync")
         cmd_group.command("disable", "disable_rsync")
+        cmd_group.command("list", "list_rsync")
 
     with self.command_group(
         "iot ops identity",
