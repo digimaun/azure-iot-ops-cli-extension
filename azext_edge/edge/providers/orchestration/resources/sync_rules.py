@@ -4,7 +4,7 @@
 # Licensed under the MIT License. See License file in the project root for license information.
 # ----------------------------------------------------------------------------------------------
 
-from typing import TYPE_CHECKING, List, NamedTuple, Optional, Set
+from typing import TYPE_CHECKING, List, NamedTuple, Optional
 
 from azure.cli.core.azclierror import (
     AzureResponseError,
@@ -32,7 +32,7 @@ if TYPE_CHECKING:
 KUBERNETES_ARC_CONTRIBUTOR_ROLE_ID = "5d3f1697-4507-4d08-bb4a-477695db5f82"
 K8_BRIDGE_APP_ID = "319f651f-7ddb-4fc6-9857-7aef9250bd05"
 ADR_PROVIDER = "Microsoft.DeviceRegistry"
-OPS_PROVIDER = "Microsoft.IoTOperations"
+OPS_PROVIDER = "microsoft.iotoperations"  # This casing matches with template.
 
 logger = get_logger(__name__)
 console = Console()
@@ -50,19 +50,20 @@ def get_sync_rule_attrs(
     rule_adr_name: Optional[str] = None,
     rule_ops_pri: Optional[int] = None,
     rule_adr_pri: Optional[int] = None,
-) -> Set[SyncRuleAttr]:
-    return {
+) -> List[SyncRuleAttr]:
+    return [
         SyncRuleAttr(
             provider=OPS_PROVIDER,
             priority=rule_ops_pri or 400,
-            name=rule_ops_name or f"{custom_location_name}-ops-sync",
+            name=rule_ops_name
+            or f"{custom_location_name}-broker-sync",  # Not my favorite but aligns with template naming.
         ),
         SyncRuleAttr(
             provider=ADR_PROVIDER,
             priority=rule_adr_pri or 200,
             name=rule_adr_name or f"{custom_location_name}-adr-sync",
         ),
-    }
+    ]
 
 
 class SyncRules(Queryable):
@@ -77,7 +78,9 @@ class SyncRules(Queryable):
         self.extloc_mgmt_client = get_extloc_mgmt_client(self.default_subscription_id)
         self.ops: "ResourceSyncRulesOperations" = self.extloc_mgmt_client.resource_sync_rules
 
-    def _get_enable_params(self, provider_name: str, priority: Optional[int] = None) -> dict:
+    def _get_enable_params(
+        self, provider_name: str, priority: Optional[int] = None, tags: Optional[dict] = None
+    ) -> dict:
         parsed_cl_id = parse_resource_id(self.custom_location["id"])
         rg_id = "/subscriptions/{}/resourceGroups/{}".format(
             parsed_cl_id["subscription"], parsed_cl_id["resource_group"]
@@ -90,6 +93,9 @@ class SyncRules(Queryable):
         }
         if priority:
             properties["priority"] = priority
+        if tags:
+            parameters["tags"] = tags
+
         properties["selector"] = {"matchLabels": {"management.azure.com/provider-name": provider_name}}
         parameters["properties"] = properties
 
@@ -99,11 +105,12 @@ class SyncRules(Queryable):
         self,
         skip_role_assignments: Optional[bool] = None,
         custom_role_id: Optional[str] = None,
-        k8_bridge_oid: Optional[str] = None,
+        k8_bridge_sp_oid: Optional[str] = None,
         rule_ops_name: Optional[str] = None,
         rule_adr_name: Optional[str] = None,
         rule_ops_pri: Optional[int] = None,
         rule_adr_pri: Optional[int] = None,
+        tags: Optional[dict] = None,
         **kwargs,
     ) -> List[dict]:
         with console.status("Working...") as c:
@@ -121,7 +128,9 @@ class SyncRules(Queryable):
                     resource_name=self.custom_location["name"],
                     child_resource_name=rule_attrs.name,
                     parameters=self._get_enable_params(
-                        provider_name=rule_attrs.provider, priority=rule_attrs.priority
+                        provider_name=rule_attrs.provider,
+                        priority=rule_attrs.priority,
+                        tags=tags,
                     ),
                 )
                 pollers.append(poller)
@@ -132,11 +141,11 @@ class SyncRules(Queryable):
                 target_role_def = custom_role_id or ROLE_DEF_FORMAT_STR.format(
                     subscription_id=self.default_subscription_id, role_id=KUBERNETES_ARC_CONTRIBUTOR_ROLE_ID
                 )
-                k8_bridge_sp_id = k8_bridge_oid or self.get_sp_id(K8_BRIDGE_APP_ID)
-                if not k8_bridge_sp_id:
+                k8_bridge_sp_oid = k8_bridge_sp_oid or self.get_sp_id(K8_BRIDGE_APP_ID)
+                if not k8_bridge_sp_oid:
                     c.stop()
                     logger.warning(
-                        "K8 Bridge service principal not found and not provided via parameter."
+                        "Unable to query K8 Bridge service principal and OID not provided via parameter. "
                         "Skipping role assignment."
                     )
                     return result
@@ -145,7 +154,7 @@ class SyncRules(Queryable):
                 try:
                     permission_manager.apply_role_assignment(
                         scope=self.custom_location["id"],
-                        principal_id=k8_bridge_sp_id,
+                        principal_id=k8_bridge_sp_oid,
                         role_def_id=target_role_def,
                         principal_type=PrincipalType.SERVICE_PRINCIPAL.value,
                     )

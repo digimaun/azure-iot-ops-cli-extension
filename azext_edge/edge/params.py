@@ -1689,7 +1689,7 @@ def load_iotops_arguments(self, _):
             arg_group="Custom Rule",
         )
         context.argument(
-            "k8_bridge_oid",
+            "k8_bridge_sp_oid",
             options_list=["--k8-bridge-oid"],
             help="Provide an explicit K8 Bridge service principal OID for the custom location role assignment.",
         )
