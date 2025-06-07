@@ -2930,7 +2930,7 @@ def load_iotops_help():
             az iot ops rsync enable -n myinstance -g myresourcegroup --skip-ra
         - name: Enable resource sync for the instance and explictly provide the K8 Bridge principal OID.
           text: >
-            az iot ops rsync enable -n myinstance -g myresourcegroup --k8-bridge-sp-oid $TENANT_K8_BRIDGE_SP_OID 
+            az iot ops rsync enable -n myinstance -g myresourcegroup --k8-bridge-sp-oid $TENANT_K8_BRIDGE_SP_OID
         - name: Enable resource sync for the instance with some customization.
           text: >
             az iot ops rsync enable -n myinstance -g myresourcegroup
