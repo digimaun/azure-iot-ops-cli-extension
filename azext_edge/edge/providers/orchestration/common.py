@@ -47,14 +47,18 @@ EXTENSION_TYPE_PLATFORM = "microsoft.iotoperations.platform"
 EXTENSION_TYPE_ACS = "microsoft.arc.containerstorage"
 EXTENSION_TYPE_SSC = "microsoft.azure.secretstore"
 EXTENSION_TYPE_OPS = "microsoft.iotoperations"
+EXTENSION_TYPE_CM = "microsoft.certmanagement"
 
-OPS_EXTENSION_DEPS = frozenset([EXTENSION_TYPE_PLATFORM, EXTENSION_TYPE_SSC])
+EXTENSION_MONIKER_CM = "certManager"
+
+OPS_EXTENSION_DEPS = frozenset([EXTENSION_TYPE_CM, EXTENSION_TYPE_SSC])
 
 EXTENSION_TYPE_TO_MONIKER_MAP = {
     EXTENSION_TYPE_PLATFORM: "platform",
     EXTENSION_TYPE_SSC: "secretStore",
     EXTENSION_TYPE_ACS: "containerStorage",
     EXTENSION_TYPE_OPS: "iotOperations",
+    EXTENSION_TYPE_CM: "certManager",
 }
 
 EXTENSION_MONIKER_TO_ALIAS_MAP = {
@@ -62,6 +66,7 @@ EXTENSION_MONIKER_TO_ALIAS_MAP = {
     "secretStore": "ssc",
     "containerStorage": "acs",
     "iotOperations": "ops",
+    EXTENSION_MONIKER_CM: "cm",
 }
 
 EXTENSION_ALIAS_TO_TYPE_MAP = {
@@ -69,6 +74,7 @@ EXTENSION_ALIAS_TO_TYPE_MAP = {
     "ssc": EXTENSION_TYPE_SSC,
     "acs": EXTENSION_TYPE_ACS,
     "ops": EXTENSION_TYPE_OPS,
+    "cm": EXTENSION_TYPE_CM,
 }
 
 

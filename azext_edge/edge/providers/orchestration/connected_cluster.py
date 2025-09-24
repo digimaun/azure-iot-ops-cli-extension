@@ -24,6 +24,7 @@ QUERIES = {
             or properties.ExtensionType =~ 'microsoft.deviceregistry.assets'
             or properties.ExtensionType =~ 'microsoft.azure.secretstore'
             or properties.ExtensionType =~ 'microsoft.arc.containerstorage'
+            or properties.ExtensionType =~ 'microsoft.certmanagement'
         | project id, name, apiVersion
         """,
     "get_aio_custom_locations": """
