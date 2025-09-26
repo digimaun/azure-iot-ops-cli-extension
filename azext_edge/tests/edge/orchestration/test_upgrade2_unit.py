@@ -264,64 +264,75 @@ class UpgradeScenario:
 @pytest.mark.parametrize(
     "target_scenario,expected_patched_ext_types",
     [
-        (UpgradeScenario("Nothing to update. Cluster extensions match deployment extensions."), {}),
+        # ========== No-op scenarios - Nothing to upgrade ==========
+        (UpgradeScenario("No-op: All extensions at desired versions"), {}),
         (
-            UpgradeScenario(
-                "Nothing to update. Cluster extensions match deployment extensions sans platform which is ahead."
-            ).set_extension(ext_type=EXTENSION_TYPE_CM, ext_vers="9.9.9"),
-            {},
-        ),
-        (
-            UpgradeScenario(
-                "Nothing to update. Ops extension release train has delta but is not applicable "
-                "when version is not upgradeable."
-            ).set_extension(ext_type=EXTENSION_TYPE_OPS, ext_vers="9.9.9", ext_train="stablez"),
-            {},
-        ),
-        (
-            UpgradeScenario(
-                "This variant of the prior test case ensures release train does not increment when user "
-                "explicitly overrides extension version to a lower unknown version."
-            )
-            .set_extension(ext_type=EXTENSION_TYPE_OPS, ext_vers="9.9.9", ext_train="stablez")
-            .set_user_kwargs(
-                ops_version="8.8.8",
-                force=True,
+            UpgradeScenario("No-op: Certmanager extension ahead of desired version").set_extension(
+                ext_type=EXTENSION_TYPE_CM, ext_vers="9.9.9"
             ),
-            {EXTENSION_TYPE_OPS: {"properties": {"extensionType": EXTENSION_TYPE_OPS, "version": "8.8.8"}}},
+            {},
         ),
         (
-            UpgradeScenario(
-                "In this case, the train increments to match desired state if the desired state version "
-                "is equal to current state version."
-            ).set_extension(ext_type=EXTENSION_TYPE_OPS, ext_train="stablez"),
+            UpgradeScenario("No-op: Version ahead with different train (no explicit version override)").set_extension(
+                ext_type=EXTENSION_TYPE_OPS, ext_vers="9.9.9", ext_train="custom-train"
+            ),
+            {},
+        ),
+        # ========== Train-only updates (version unchanged) ==========
+        (
+            UpgradeScenario("Train update: Auto-increment when version matches desired").set_extension(
+                ext_type=EXTENSION_TYPE_OPS, ext_train="old-train"
+            ),
             {EXTENSION_TYPE_OPS: {"properties": {"extensionType": EXTENSION_TYPE_OPS, "releaseTrain": BUILT_IN_VALUE}}},
         ),
         (
-            UpgradeScenario(
-                "Variant of prior case. Train does not auto-increment if explicit version is provided."
-                "This is an error without --force because a compatible upgrade is within 2 patch versions."
-            )
-            .set_extension(ext_type=EXTENSION_TYPE_OPS, ext_train="stable")
-            .set_user_kwargs(ops_version="9.9.9")
-            .set_expected_exception(
-                ValidationError, match=r".*The desired 9\.9\.9 version is incompatible \(different major version\)\."
-            ),
-            {},
+            UpgradeScenario("Train update: Explicit train override").set_user_kwargs(ops_train="custom-train"),
+            {EXTENSION_TYPE_OPS: {"properties": {"extensionType": EXTENSION_TYPE_OPS, "releaseTrain": "custom-train"}}},
         ),
         (
-            UpgradeScenario("Same as prior case, but ensuring validation passes with --force.")
-            .set_extension(ext_type=EXTENSION_TYPE_OPS, ext_train="stable")
+            UpgradeScenario("Train update: No auto-increment with explicit version override")
+            .set_extension(ext_type=EXTENSION_TYPE_OPS, ext_train="old-train")
             .set_user_kwargs(ops_version="9.9.9", force=True),
             {EXTENSION_TYPE_OPS: {"properties": {"extensionType": EXTENSION_TYPE_OPS, "version": "9.9.9"}}},
         ),
+        # ========== Version upgrades (compatible) ==========
         (
-            UpgradeScenario(
-                "Ensure default version and train increments for ops when upgrade is known."
-                "This is an error without --force because a compatible upgrade is within 2 patch versions."
-            )
-            .set_extension(ext_type=EXTENSION_TYPE_OPS, ext_vers="0.1.0", ext_train="train")
+            UpgradeScenario("Version upgrade: Certmanager extension minor update").set_extension(
+                ext_type=EXTENSION_TYPE_CM, ext_vers="0.5.0"
+            ),
+            {EXTENSION_TYPE_CM: {"properties": {"extensionType": EXTENSION_TYPE_CM, "version": BUILT_IN_VALUE}}},
+        ),
+        (
+            UpgradeScenario("Version upgrade: Ops extension with dev version string")
+            .set_extension(ext_type=EXTENSION_TYPE_OPS, ext_vers="1.0.0")
+            .set_user_kwargs(ops_version="1.1.0-main.20250425.8"),
+            {
+                EXTENSION_TYPE_OPS: {
+                    "properties": {"extensionType": EXTENSION_TYPE_OPS, "version": "1.1.0-main.20250425.8"}
+                }
+            },
+        ),
+        (
+            UpgradeScenario("Version upgrade: Dev version string comparison")
+            .set_extension(ext_type=EXTENSION_TYPE_OPS, ext_vers="1.1.0-main.20250425.8")
+            .set_user_kwargs(ops_version="1.1.0-main.20250425.9"),
+            {
+                EXTENSION_TYPE_OPS: {
+                    "properties": {"extensionType": EXTENSION_TYPE_OPS, "version": "1.1.0-main.20250425.9"}
+                }
+            },
+        ),
+        # ========== Version upgrades requiring --force ==========
+        (
+            UpgradeScenario("Force required: Major version incompatibility")
+            .set_extension(ext_type=EXTENSION_TYPE_OPS, ext_vers="0.1.0", ext_train="old")
             .set_expected_exception(ValidationError, match=r".*version is incompatible \(different major version\)\."),
+            {},
+        ),
+        (
+            UpgradeScenario("Force applied: Major version incompatibility override")
+            .set_extension(ext_type=EXTENSION_TYPE_OPS, ext_vers="0.1.0", ext_train="old")
+            .set_user_kwargs(force=True),
             {
                 EXTENSION_TYPE_OPS: {
                     "properties": {
@@ -333,13 +344,60 @@ class UpgradeScenario:
             },
         ),
         (
-            UpgradeScenario(
-                "Ensure default version for platform when upgrade is known. Ensure confirm prompt.", confirm_yes=False
-            ).set_extension(ext_type=EXTENSION_TYPE_CM, ext_vers="0.5.0"),
-            {EXTENSION_TYPE_CM: {"properties": {"extensionType": EXTENSION_TYPE_CM, "version": BUILT_IN_VALUE}}},
+            UpgradeScenario("Force required: More than 2 minor versions ahead")
+            .set_extension(ext_type=EXTENSION_TYPE_OPS, ext_vers="1.0.0")
+            .set_user_kwargs(ops_version="1.3.0")
+            .set_expected_exception(
+                ValidationError, match=r".*version is incompatible \(more than 2 minor versions ahead\)\."
+            ),
+            {},
         ),
         (
-            UpgradeScenario("Patch platform, ssc and ops extensions with --force.")
+            UpgradeScenario("Force applied: More than 2 minor versions ahead override")
+            .set_extension(ext_type=EXTENSION_TYPE_OPS, ext_vers="1.0.0")
+            .set_user_kwargs(ops_version="1.3.0", force=True),
+            {EXTENSION_TYPE_OPS: {"properties": {"extensionType": EXTENSION_TYPE_OPS, "version": "1.3.0"}}},
+        ),
+        # ========== Downgrades (require --force) ==========
+        (
+            UpgradeScenario("Downgrade blocked: Version less than current")
+            .set_extension(ext_type=EXTENSION_TYPE_CM, ext_vers="1.0.0")
+            .set_user_kwargs(cm_version="0.9.9")
+            .set_expected_exception(ValidationError, match=r".*is a downgrade which is not supported\."),
+            {},
+        ),
+        (
+            UpgradeScenario("Downgrade allowed: With --force flag")
+            .set_extension(ext_type=EXTENSION_TYPE_CM, ext_vers="1.0.0")
+            .set_user_kwargs(cm_version="0.9.9", force=True),
+            {EXTENSION_TYPE_CM: {"properties": {"extensionType": EXTENSION_TYPE_CM, "version": "0.9.9"}}},
+        ),
+        (
+            UpgradeScenario("Same version allowed: No validation error")
+            .set_extension(ext_type=EXTENSION_TYPE_CM, ext_vers="1.0.0")
+            .set_user_kwargs(cm_version="1.0.0"),
+            {EXTENSION_TYPE_CM: {"properties": {"extensionType": EXTENSION_TYPE_CM, "version": "1.0.0"}}},
+        ),
+        # ========== Configuration updates ==========
+        (
+            UpgradeScenario("Config update: Ops extension config override").set_user_kwargs(ops_config=["a=b"]),
+            {
+                EXTENSION_TYPE_OPS: {
+                    "properties": {"extensionType": EXTENSION_TYPE_OPS, "configurationSettings": {"a": "b"}}
+                }
+            },
+        ),
+        (
+            UpgradeScenario("Config update: Multiple config settings").set_user_kwargs(ssc_config=["c=d", "e=f"]),
+            {
+                EXTENSION_TYPE_SSC: {
+                    "properties": {"extensionType": EXTENSION_TYPE_SSC, "configurationSettings": {"c": "d", "e": "f"}}
+                }
+            },
+        ),
+        # ========== Multiple extensions update ==========
+        (
+            UpgradeScenario("Multi-extension: Platform, SSC, and Ops with --force")
             .set_extension(ext_type=EXTENSION_TYPE_CM, ext_vers="0.5.0")
             .set_extension(ext_type=EXTENSION_TYPE_OPS, ext_vers="0.2.0")
             .set_extension(ext_type=EXTENSION_TYPE_SSC, ext_vers="0.3.0")
@@ -351,63 +409,20 @@ class UpgradeScenario:
             },
         ),
         (
-            UpgradeScenario("Patch ops extension due to ops_config override").set_user_kwargs(ops_config=["a=b"]),
-            {
-                EXTENSION_TYPE_OPS: {
-                    "properties": {"extensionType": EXTENSION_TYPE_OPS, "configurationSettings": {"a": "b"}}
-                }
-            },
-        ),
-        (
-            UpgradeScenario("Patch ops extension due to ops_version override. Must use --force.").set_user_kwargs(
-                ops_version="2.0.0", force=True
-            ),
-            {EXTENSION_TYPE_OPS: {"properties": {"extensionType": EXTENSION_TYPE_OPS, "version": "2.0.0"}}},
-        ),
-        (
-            UpgradeScenario("Patch ops extension due to ops_version override with dev version string variant.")
-            .set_extension(ext_type=EXTENSION_TYPE_OPS, ext_vers="1.0.0")
-            .set_user_kwargs(ops_version="1.1.0-main.20250425.8"),
-            {
-                EXTENSION_TYPE_OPS: {
-                    "properties": {"extensionType": EXTENSION_TYPE_OPS, "version": "1.1.0-main.20250425.8"}
-                }
-            },
-        ),
-        (
-            UpgradeScenario(
-                "Patch ops extension due to ops_version override with dev version string variant supports comparison."
-            )
-            .set_extension(ext_type=EXTENSION_TYPE_OPS, ext_vers="1.1.0-main.20250425.8")
-            .set_user_kwargs(ops_version="1.1.0-main.20250425.9"),
-            {
-                EXTENSION_TYPE_OPS: {
-                    "properties": {"extensionType": EXTENSION_TYPE_OPS, "version": "1.1.0-main.20250425.9"}
-                }
-            },
-        ),
-        (
-            UpgradeScenario("Patch ops extension due to ops_train override.").set_user_kwargs(ops_train="stablez"),
-            {EXTENSION_TYPE_OPS: {"properties": {"extensionType": EXTENSION_TYPE_OPS, "releaseTrain": "stablez"}}},
-        ),
-        (
-            UpgradeScenario(
-                "Patch ops and ssc extensions. ssc is patched due to overrides."
-                "Have to use --force for iot ops extension."
-            )
+            UpgradeScenario("Multi-extension: SSC with all overrides, Ops with version update")
             .set_extension(ext_type=EXTENSION_TYPE_SSC, ext_vers="1.0.0")
             .set_extension(ext_type=EXTENSION_TYPE_OPS, ext_vers="0.1.0")
             .set_user_kwargs(
                 ssc_config=["c=d", "e=f"],
                 ssc_version="1.1.1",
-                ssc_train="stablezz",
+                ssc_train="custom-train",
                 force=True,
             ),
             {
                 EXTENSION_TYPE_SSC: {
                     "properties": {
                         "extensionType": EXTENSION_TYPE_SSC,
-                        "releaseTrain": "stablezz",
+                        "releaseTrain": "custom-train",
                         "version": "1.1.1",
                         "configurationSettings": {"c": "d", "e": "f"},
                     }
@@ -415,51 +430,15 @@ class UpgradeScenario:
                 EXTENSION_TYPE_OPS: {"properties": {"extensionType": EXTENSION_TYPE_OPS, "version": BUILT_IN_VALUE}},
             },
         ),
+        # ========== Failed provisioning state handling ==========
         (
-            UpgradeScenario("Throws ValidationError because cluster is not connected.")
-            .set_extension(ext_type=EXTENSION_TYPE_CM, ext_vers="0.5.0")
-            .set_cluster_connected_status("Disconnected"),
-            {},
-        ),
-        (
-            UpgradeScenario("Throws ValidationError because IoT Ops extension is missing.").set_extension(
-                ext_type=EXTENSION_TYPE_OPS, remove=True
+            UpgradeScenario("Failed state: Re-apply same version").set_extension(
+                ext_type=EXTENSION_TYPE_OPS, ext_vers=BUILT_IN_VALUE, provisioning_state="Failed"
             ),
-            {},
-        ),
-        (
-            UpgradeScenario("Throws HttpResponseError due to service 500.")
-            .set_extension(ext_type=EXTENSION_TYPE_CM, ext_vers="0.5.0")
-            .set_response_on_patch(ext_type=EXTENSION_TYPE_CM, code=500, body={"error": "server error"}),
-            {EXTENSION_TYPE_CM: {}},
-        ),
-        (
-            UpgradeScenario("Upgrade raises validation error if desired version is less than current.")
-            .set_extension(ext_type=EXTENSION_TYPE_CM, ext_vers="1.0.0")
-            .set_expected_exception(ValidationError)
-            .set_user_kwargs(cm_version="0.9.9"),
-            {},
-        ),
-        (
-            UpgradeScenario("Validation error can be avoided with --force.")
-            .set_extension(ext_type=EXTENSION_TYPE_CM, ext_vers="1.0.0")
-            .set_user_kwargs(cm_version="0.9.9", force=True),
-            {EXTENSION_TYPE_CM: {"properties": {"extensionType": EXTENSION_TYPE_CM, "version": "0.9.9"}}},
-        ),
-        (
-            UpgradeScenario("Desired and current being the same will not raise a validation error.")
-            .set_extension(ext_type=EXTENSION_TYPE_CM, ext_vers="1.0.0")
-            .set_user_kwargs(cm_version="1.0.0"),
-            {EXTENSION_TYPE_CM: {"properties": {"extensionType": EXTENSION_TYPE_CM, "version": "1.0.0"}}},
-        ),
-        (
-            UpgradeScenario(
-                "Failed provisioning state by default means inclusion of the same version in the next upgrade run."
-            ).set_extension(ext_type=EXTENSION_TYPE_OPS, ext_vers=BUILT_IN_VALUE, provisioning_state="Failed"),
             {EXTENSION_TYPE_OPS: {"properties": {"extensionType": EXTENSION_TYPE_OPS, "version": BUILT_IN_VALUE}}},
         ),
         (
-            UpgradeScenario("Failed provisioning state against multiple extensions.")
+            UpgradeScenario("Failed state: Multiple extensions")
             .set_extension(ext_type=EXTENSION_TYPE_OPS, ext_vers=BUILT_IN_VALUE, provisioning_state="Failed")
             .set_extension(ext_type=EXTENSION_TYPE_CM, ext_vers=BUILT_IN_VALUE, provisioning_state="Failed"),
             {
@@ -468,10 +447,34 @@ class UpgradeScenario:
             },
         ),
         (
-            UpgradeScenario("Failed provisioning state but overriding version.")
+            UpgradeScenario("Failed state: With version override")
             .set_extension(ext_type=EXTENSION_TYPE_OPS, ext_vers="1.0.0", provisioning_state="Failed")
             .set_user_kwargs(ops_version="1.1.0"),
             {EXTENSION_TYPE_OPS: {"properties": {"extensionType": EXTENSION_TYPE_OPS, "version": "1.1.0"}}},
+        ),
+        # ========== Error scenarios ==========
+        (
+            UpgradeScenario("Error: Cluster not connected")
+            .set_extension(ext_type=EXTENSION_TYPE_CM, ext_vers="0.5.0")
+            .set_cluster_connected_status("Disconnected"),
+            {},
+        ),
+        (
+            UpgradeScenario("Error: IoT Ops extension missing").set_extension(ext_type=EXTENSION_TYPE_OPS, remove=True),
+            {},
+        ),
+        (
+            UpgradeScenario("Error: Service returns 500")
+            .set_extension(ext_type=EXTENSION_TYPE_CM, ext_vers="0.5.0")
+            .set_response_on_patch(ext_type=EXTENSION_TYPE_CM, code=500, body={"error": "server error"}),
+            {EXTENSION_TYPE_CM: {}},
+        ),
+        # ========== User confirmation prompt test ==========
+        (
+            UpgradeScenario("Confirm prompt: Certmanager extension upgrade", confirm_yes=False).set_extension(
+                ext_type=EXTENSION_TYPE_CM, ext_vers="0.5.0"
+            ),
+            {EXTENSION_TYPE_CM: {"properties": {"extensionType": EXTENSION_TYPE_CM, "version": BUILT_IN_VALUE}}},
         ),
     ],
 )
