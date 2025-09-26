@@ -455,6 +455,13 @@ def load_iotops_arguments(self, _):
             help="ID of consumer group that the data flow uses to read messages " "from the Kafka topic.",
         )
         context.argument(
+            "latency",
+            options_list=["--latency", "-l"],
+            help="The batching latency in milliseconds. Min value: 0, max value: 65535.",
+            type=int,
+            arg_group="Batching Configuration",
+        )
+        context.argument(
             "partition_strategy",
             options_list=["--partition-strategy", "--ps"],
             arg_type=get_enum_type(KafkaPartitionStrategyType, default=KafkaPartitionStrategyType.DEFAULT.value),
@@ -467,6 +474,15 @@ def load_iotops_arguments(self, _):
             arg_type=get_enum_type(AuthenticationSaslType, default=None),
             help="The type of SASL authentication.",
             arg_group="SASL Authentication",
+        )
+        context.argument(
+            "secret_name",
+            options_list=["--secret-name", "-s"],
+            help="The name for the kubernetes secret that contains the X509 client certificate, private key "
+            "corresponding to the client certificate, and intermediate certificates for the client certificate "
+            "chain. "
+            "Note: The certificate and private key must be in PEM format and not password protected.",
+            arg_group="X509 Authentication",
         )
         context.argument(
             "tls_disabled",
@@ -619,13 +635,6 @@ def load_iotops_arguments(self, _):
                 help="The name of the Event Hubs namespace.",
             )
             context.argument(
-                "latency",
-                options_list=["--latency", "-l"],
-                help="The batching latency in milliseconds. Min value: 0, max value: 65535.",
-                type=int,
-                arg_group="Batching Configuration",
-            )
-            context.argument(
                 "secret_name",
                 options_list=["--secret-name", "-s"],
                 help="The name for the kubernetes secret that contains event hub connection string. "
@@ -658,13 +667,6 @@ def load_iotops_arguments(self, _):
                 "'Bootstrap server' value. Can be found in "
                 "event stream destination -- 'SAS Key Authentication' "
                 "section. In the form of *.servicebus.windows.net:9093",
-            )
-            context.argument(
-                "latency",
-                options_list=["--latency", "-l"],
-                help="The batching latency in milliseconds. Min value: 0, max value: 65535.",
-                type=int,
-                arg_group="Batching Configuration",
             )
             context.argument(
                 "secret_name",
@@ -702,13 +704,6 @@ def load_iotops_arguments(self, _):
                 options_list=["--port"],
                 help="The port number of the Kafka broker host setting.",
                 type=int,
-            )
-            context.argument(
-                "latency",
-                options_list=["--latency", "-l"],
-                help="The batching latency in milliseconds. Min value: 0, max value: 65535.",
-                type=int,
-                arg_group="Batching Configuration",
             )
             context.argument(
                 "secret_name",
@@ -763,15 +758,6 @@ def load_iotops_arguments(self, _):
                 arg_group="Kubernetes Service Account Token",
             )
             context.argument(
-                "secret_name",
-                options_list=["--secret-name", "-s"],
-                help="The name for the kubernetes secret that contains the X509 client certificate, private key "
-                "corresponding to the client certificate, and intermediate certificates for the client certificate "
-                "chain. "
-                "Note: The certificate and private key must be in PEM format and not password protected.",
-                arg_group="X509 Authentication",
-            )
-            context.argument(
                 "authentication_type",
                 options_list=["--auth-type"],
                 choices=CaseInsensitiveList(
@@ -799,15 +785,6 @@ def load_iotops_arguments(self, _):
                 options_list=["--port"],
                 help="The port number of the event grid namespace.",
                 type=int,
-            )
-            context.argument(
-                "secret_name",
-                options_list=["--secret-name", "-s"],
-                help="The name for the kubernetes secret that contains the X509 client certificate, private key "
-                "corresponding to the client certificate, and intermediate certificates for the client certificate "
-                "chain. "
-                "Note: The certificate and private key must be in PEM format and not password protected.",
-                arg_group="X509 Authentication",
             )
             context.argument(
                 "authentication_type",
@@ -838,15 +815,6 @@ def load_iotops_arguments(self, _):
                 type=int,
             )
             context.argument(
-                "secret_name",
-                options_list=["--secret-name", "-s"],
-                help="The name for the kubernetes secret that contains the X509 client certificate, private key "
-                "corresponding to the client certificate, and intermediate certificates for the client certificate "
-                "chain. "
-                "Note: The certificate and private key must be in PEM format and not password protected.",
-                arg_group="X509 Authentication",
-            )
-            context.argument(
                 "sami_audience",
                 options_list=["--sami-audience", "--sami-aud"],
                 help="The audience of the system assigned managed identity.",
@@ -866,6 +834,33 @@ def load_iotops_arguments(self, _):
                         DataflowEndpointAuthenticationType.SERVICEACCESSTOKEN.value,
                         DataflowEndpointAuthenticationType.SYSTEMASSIGNED.value,
                         DataflowEndpointAuthenticationType.USERASSIGNED.value,
+                        DataflowEndpointAuthenticationType.X509.value,
+                    ]
+                ),
+            )
+
+    for cmd_space in [
+        "iot ops dataflow endpoint create otel",
+        "iot ops dataflow endpoint update otel",
+    ]:
+        with self.argument_context(cmd_space) as context:
+            context.argument(
+                "hostname",
+                options_list=["--hostname"],
+                help="The hostname of the open telemetry setting.",
+            )
+            context.argument(
+                "port",
+                options_list=["--port"],
+                help="The port number of the open telemetry setting.",
+                type=int,
+            )
+            context.argument(
+                "authentication_type",
+                options_list=["--auth-type"],
+                choices=CaseInsensitiveList(
+                    [
+                        DataflowEndpointAuthenticationType.SERVICEACCESSTOKEN.value,
                         DataflowEndpointAuthenticationType.X509.value,
                     ]
                 ),
