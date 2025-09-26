@@ -50,31 +50,32 @@ EXTENSION_TYPE_OPS = "microsoft.iotoperations"
 EXTENSION_TYPE_CM = "microsoft.certmanagement"
 
 EXTENSION_MONIKER_CM = "certManager"
+EXTENSION_MONIKER_OPS = "iotOperations"
 
 OPS_EXTENSION_DEPS = frozenset([EXTENSION_TYPE_CM, EXTENSION_TYPE_SSC])
 
 EXTENSION_TYPE_TO_MONIKER_MAP = {
+    EXTENSION_TYPE_CM: EXTENSION_MONIKER_CM,
     EXTENSION_TYPE_PLATFORM: "platform",
     EXTENSION_TYPE_SSC: "secretStore",
     EXTENSION_TYPE_ACS: "containerStorage",
-    EXTENSION_TYPE_OPS: "iotOperations",
-    EXTENSION_TYPE_CM: "certManager",
+    EXTENSION_TYPE_OPS: EXTENSION_MONIKER_OPS,
 }
 
 EXTENSION_MONIKER_TO_ALIAS_MAP = {
+    EXTENSION_MONIKER_CM: "cm",
     "platform": "plat",
     "secretStore": "ssc",
     "containerStorage": "acs",
-    "iotOperations": "ops",
-    EXTENSION_MONIKER_CM: "cm",
+    EXTENSION_MONIKER_OPS: "ops",
 }
 
 EXTENSION_ALIAS_TO_TYPE_MAP = {
+    "cm": EXTENSION_TYPE_CM,
     "plat": EXTENSION_TYPE_PLATFORM,
     "ssc": EXTENSION_TYPE_SSC,
     "acs": EXTENSION_TYPE_ACS,
     "ops": EXTENSION_TYPE_OPS,
-    "cm": EXTENSION_TYPE_CM,
 }
 
 
