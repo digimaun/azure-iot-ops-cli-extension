@@ -24,6 +24,8 @@ from azext_edge.edge.providers.orchestration.common import (
     EXTENSION_TYPE_PLATFORM,
     EXTENSION_TYPE_SSC,
     EXTENSION_TYPE_TO_MONIKER_MAP,
+    PROVISIONING_STATE_FAILED,
+    PROVISIONING_STATE_SUCCESS,
     ClusterConnectStatus,
     ConfigSyncModeType,
 )
@@ -49,6 +51,13 @@ T = TypeVar("T", bound="UpgradeScenario")
 STANDARD_HEADERS = {"content-type": "application/json"}
 
 BUILT_IN_VALUE = "x.y.z"
+
+DEFAULT_RETRY_COUNT = 4  # 1 initial + 3 retries
+DEFAULT_LOG_WARNING_MESSAGE = "Nothing to upgrade :)"
+HTTP_STATUS_OK = 200
+HTTP_STATUS_ACCEPTED = 202
+HTTP_STATUS_SERVICE_ERROR = 500
+HTTP_STATUS_SERVICE_UNAVAILABLE = 503
 
 
 def get_mock_cluster_record(
@@ -136,7 +145,7 @@ class UpgradeScenario:
                     "version": vers,
                     "releaseTrain": train,
                     "configurationSettings": {},
-                    "provisioningState": "Succeeded",
+                    "provisioningState": PROVISIONING_STATE_SUCCESS,
                 },
                 "name": EXTENSION_TYPE_TO_MONIKER_MAP[ext_type],
             }
@@ -179,9 +188,9 @@ class UpgradeScenario:
         return self
 
     def set_response_on_patch(
-        self: T, ext_type: str, code: int = 200, body: Optional[dict] = None, headers: Optional[dict] = None
+        self: T, ext_type: str, code: int = HTTP_STATUS_OK, body: Optional[dict] = None, headers: Optional[dict] = None
     ) -> T:
-        if code not in (200, 202):
+        if code not in (HTTP_STATUS_OK, HTTP_STATUS_ACCEPTED):
             self.expect_exception = HttpResponseError
         if not headers:
             headers = {}
@@ -244,7 +253,7 @@ class UpgradeScenario:
         for ext_type in EXTENSION_TYPE_TO_MONIKER_MAP:
             if EXTENSION_TYPE_TO_MONIKER_MAP[ext_type] == ext_moniker:
                 status_code, response_body, headers = self.ext_type_response_map.get(ext_type) or (
-                    200,
+                    HTTP_STATUS_OK,
                     json.loads(request.body),
                     {},
                 )
@@ -254,10 +263,47 @@ class UpgradeScenario:
                 response_headers = dict(STANDARD_HEADERS, **headers)
                 return (status_code, response_headers, json.dumps(response_body))
 
-        return (502, STANDARD_HEADERS, json.dumps({"error": "server error"}))
+        return (HTTP_STATUS_SERVICE_UNAVAILABLE, STANDARD_HEADERS, json.dumps({"error": "server error"}))
 
     def get_extensions(self) -> List[dict]:
         return list(self.extensions.values())
+
+    def with_failed_extension(self: T, ext_type: str) -> T:
+        """For failed provisioning state scenarios."""
+        return self.set_extension(
+            ext_type=ext_type, ext_vers=BUILT_IN_VALUE, provisioning_state=PROVISIONING_STATE_FAILED
+        )
+
+    def expecting_validation_error(self: T, match: Optional[str] = None) -> T:
+        """For setting validation error expectation."""
+        return self.set_expected_exception(ValidationError, match=match)
+
+
+def build_extension_props(ext_type: str, version: str = None, train: str = None, config: dict = None) -> dict:
+    """Build standard extension properties dict."""
+    props = {"properties": {"extensionType": ext_type}}
+    if version:
+        props["properties"]["version"] = version
+    if train:
+        props["properties"]["releaseTrain"] = train
+    if config:
+        props["properties"]["configurationSettings"] = config
+    return props
+
+
+def assert_no_upgrades_performed(upgrade_result, logger_mock):
+    assert upgrade_result is None
+    logger_mock.warning.assert_called_once_with(DEFAULT_LOG_WARNING_MESSAGE)
+
+
+def assert_validation_error_raised(exc_info, expected_pattern: str):
+    assert isinstance(exc_info.value, ValidationError)
+    if expected_pattern:
+        assert re.search(expected_pattern, str(exc_info.value))
+
+
+def assert_retry_count(mock_response, expected_count: int = DEFAULT_RETRY_COUNT):
+    assert len(mock_response.calls) == expected_count
 
 
 @pytest.mark.parametrize("no_progress", [False, True])
@@ -326,7 +372,7 @@ class UpgradeScenario:
         (
             UpgradeScenario("Force required: Major version incompatibility")
             .set_extension(ext_type=EXTENSION_TYPE_OPS, ext_vers="0.1.0", ext_train="old")
-            .set_expected_exception(ValidationError, match=r".*version is incompatible \(different major version\)\."),
+            .expecting_validation_error(r".*version is incompatible \(different major version\)\."),
             {},
         ),
         (
@@ -347,9 +393,7 @@ class UpgradeScenario:
             UpgradeScenario("Force required: More than 2 minor versions ahead")
             .set_extension(ext_type=EXTENSION_TYPE_OPS, ext_vers="1.0.0")
             .set_user_kwargs(ops_version="1.3.0")
-            .set_expected_exception(
-                ValidationError, match=r".*version is incompatible \(more than 2 minor versions ahead\)\."
-            ),
+            .expecting_validation_error(r".*version is incompatible \(more than 2 minor versions ahead\)\."),
             {},
         ),
         (
@@ -363,7 +407,7 @@ class UpgradeScenario:
             UpgradeScenario("Downgrade blocked: Version less than current")
             .set_extension(ext_type=EXTENSION_TYPE_CM, ext_vers="1.0.0")
             .set_user_kwargs(cm_version="0.9.9")
-            .set_expected_exception(ValidationError, match=r".*is a downgrade which is not supported\."),
+            .expecting_validation_error(r".*is a downgrade which is not supported\."),
             {},
         ),
         (
@@ -397,7 +441,7 @@ class UpgradeScenario:
         ),
         # ========== Multiple extensions update ==========
         (
-            UpgradeScenario("Multi-extension: Platform, SSC, and Ops with --force")
+            UpgradeScenario("Multi-extension: Certmanager, SSC, and Ops with --force")
             .set_extension(ext_type=EXTENSION_TYPE_CM, ext_vers="0.5.0")
             .set_extension(ext_type=EXTENSION_TYPE_OPS, ext_vers="0.2.0")
             .set_extension(ext_type=EXTENSION_TYPE_SSC, ext_vers="0.3.0")
@@ -432,15 +476,13 @@ class UpgradeScenario:
         ),
         # ========== Failed provisioning state handling ==========
         (
-            UpgradeScenario("Failed state: Re-apply same version").set_extension(
-                ext_type=EXTENSION_TYPE_OPS, ext_vers=BUILT_IN_VALUE, provisioning_state="Failed"
-            ),
+            UpgradeScenario("Failed state: Re-apply same version").with_failed_extension(EXTENSION_TYPE_OPS),
             {EXTENSION_TYPE_OPS: {"properties": {"extensionType": EXTENSION_TYPE_OPS, "version": BUILT_IN_VALUE}}},
         ),
         (
             UpgradeScenario("Failed state: Multiple extensions")
-            .set_extension(ext_type=EXTENSION_TYPE_OPS, ext_vers=BUILT_IN_VALUE, provisioning_state="Failed")
-            .set_extension(ext_type=EXTENSION_TYPE_CM, ext_vers=BUILT_IN_VALUE, provisioning_state="Failed"),
+            .with_failed_extension(EXTENSION_TYPE_OPS)
+            .with_failed_extension(EXTENSION_TYPE_CM),
             {
                 EXTENSION_TYPE_CM: {"properties": {"extensionType": EXTENSION_TYPE_CM, "version": BUILT_IN_VALUE}},
                 EXTENSION_TYPE_OPS: {"properties": {"extensionType": EXTENSION_TYPE_OPS, "version": BUILT_IN_VALUE}},
@@ -448,7 +490,7 @@ class UpgradeScenario:
         ),
         (
             UpgradeScenario("Failed state: With version override")
-            .set_extension(ext_type=EXTENSION_TYPE_OPS, ext_vers="1.0.0", provisioning_state="Failed")
+            .set_extension(ext_type=EXTENSION_TYPE_OPS, ext_vers="1.0.0", provisioning_state=PROVISIONING_STATE_FAILED)
             .set_user_kwargs(ops_version="1.1.0"),
             {EXTENSION_TYPE_OPS: {"properties": {"extensionType": EXTENSION_TYPE_OPS, "version": "1.1.0"}}},
         ),
@@ -466,7 +508,9 @@ class UpgradeScenario:
         (
             UpgradeScenario("Error: Service returns 500")
             .set_extension(ext_type=EXTENSION_TYPE_CM, ext_vers="0.5.0")
-            .set_response_on_patch(ext_type=EXTENSION_TYPE_CM, code=500, body={"error": "server error"}),
+            .set_response_on_patch(
+                ext_type=EXTENSION_TYPE_CM, code=HTTP_STATUS_SERVICE_ERROR, body={"error": "server error"}
+            ),
             {EXTENSION_TYPE_CM: {}},
         ),
         # ========== User confirmation prompt test ==========
@@ -475,6 +519,34 @@ class UpgradeScenario:
                 ext_type=EXTENSION_TYPE_CM, ext_vers="0.5.0"
             ),
             {EXTENSION_TYPE_CM: {"properties": {"extensionType": EXTENSION_TYPE_CM, "version": BUILT_IN_VALUE}}},
+        ),
+        # ========== Edge cases ==========
+        (
+            UpgradeScenario("Edge case: Empty config override").set_user_kwargs(ops_config=[]),
+            {},  # Empty config shouldn't trigger an upgrade
+        ),
+        (
+            UpgradeScenario("Edge case: Config with special characters").set_user_kwargs(
+                ops_config=["key=value with spaces", "special-char=@#$"]
+            ),
+            {
+                EXTENSION_TYPE_OPS: {
+                    "properties": {
+                        "extensionType": EXTENSION_TYPE_OPS,
+                        "configurationSettings": {"key": "value with spaces", "special-char": "@#$"},
+                    }
+                }
+            },
+        ),
+        (
+            UpgradeScenario("Edge case: Train update with failed state").set_extension(
+                ext_type=EXTENSION_TYPE_OPS, ext_train="old-train", provisioning_state=PROVISIONING_STATE_FAILED
+            ),
+            {
+                EXTENSION_TYPE_OPS: build_extension_props(
+                    EXTENSION_TYPE_OPS, version=BUILT_IN_VALUE, train=BUILT_IN_VALUE
+                )
+            },
         ),
     ],
 )
@@ -523,8 +595,7 @@ def test_ops_upgrade(
     upgrade_result = upgrade_instance(**call_kwargs)
 
     if not expected_patched_ext_types:
-        assert upgrade_result is None
-        mocked_logger.warning.assert_called_once_with("Nothing to upgrade :)")
+        assert_no_upgrades_performed(upgrade_result, mocked_logger)
         assert_displays(spy_upgrade_displays, no_progress, 1)
         return
 
@@ -544,14 +615,14 @@ def test_ops_upgrade(
         .set_extension(ext_type=EXTENSION_TYPE_CM, ext_vers="0.5.0")
         .set_response_on_patch(
             ext_type=EXTENSION_TYPE_CM,
-            code=503,
+            code=HTTP_STATUS_SERVICE_UNAVAILABLE,
             body={"error": "temporary problems"},
         ),
         UpgradeScenario("Retry test from async header")
         .set_extension(ext_type=EXTENSION_TYPE_CM, ext_vers="0.5.0")
         .set_response_on_patch(
             ext_type=EXTENSION_TYPE_CM,
-            code=202,
+            code=HTTP_STATUS_ACCEPTED,
             headers={"Azure-AsyncOperation": "https://localhost/async-operation"},
         )
         .set_auxiliary_kwargs(
@@ -584,7 +655,7 @@ def test_ops_upgrade_retry_assertion(
         "confirm_yes": True,
     }
     patch_status_code = target_scenario.ext_type_response_map[EXTENSION_TYPE_CM][0]
-    if patch_status_code == 202:
+    if patch_status_code == HTTP_STATUS_ACCEPTED:
         # TODO Cheap pattern. Improve later.
         mocked_responses.add(
             method=target_scenario.aux_kwargs["async_method"],
@@ -596,17 +667,17 @@ def test_ops_upgrade_retry_assertion(
         upgrade_instance(**call_kwargs)
 
     mock_response = mocked_responses.registered()[-1]
-    if patch_status_code == 503:
+    if patch_status_code == HTTP_STATUS_SERVICE_UNAVAILABLE:
         # Assert ext patch call retries
         error_status_code = patch_status_code
         assert mock_response.method == responses.PATCH
-    if patch_status_code == 202:
+    if patch_status_code == HTTP_STATUS_ACCEPTED:
         # Assert async op fetch retries
         error_status_code = target_scenario.aux_kwargs["async_code"]
         assert mock_response.method == target_scenario.aux_kwargs["async_method"]
 
     assert err.value.status_code == error_status_code, f"Expected {error_status_code} but got {err.value.status_code}"
-    assert len(mock_response.calls) == 4  # Default retry logic should retry 3 times
+    assert_retry_count(mock_response)
 
 
 def assert_result(
