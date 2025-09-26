@@ -38,7 +38,6 @@ from .common import (
     EXTENSION_MONIKER_CM,
     EXTENSION_TYPE_CM,
     EXTENSION_TYPE_OPS,
-    EXTENSION_TYPE_PLATFORM,
     EXTENSION_TYPE_SSC,
     OPS_EXTENSION_DEPS,
     PROVISIONING_STATE_SUCCESS,
@@ -220,7 +219,7 @@ class WorkManager:
         for ext_type in dependencies:
             ext_attr = dependencies.get(ext_type, {})
             if not ext_attr:
-                if ext_type != EXTENSION_TYPE_PLATFORM:  # Missing platform is not a failure.
+                if ext_type != EXTENSION_TYPE_CM:  # Missing certmanager is not a failure.
                     missing_exts.append(ext_type)
                 continue
 

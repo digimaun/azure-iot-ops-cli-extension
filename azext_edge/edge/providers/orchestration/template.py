@@ -7,6 +7,7 @@
 from copy import deepcopy
 from typing import Dict, List, NamedTuple, Optional, Union
 
+from ...util.az_client import IoTOpsMgmtApiVersion
 from .common import (
     AIO_INSECURE_LISTENER_NAME,
     AIO_INSECURE_LISTENER_SERVICE_NAME,
@@ -601,7 +602,7 @@ TEMPLATE_BLUEPRINT_ENABLEMENT = TemplateBlueprint(
         },
         "variables": {
             "VERSIONS": {"certManager": "0.6.2", "secretStore": "1.0.2"},
-            "TRAINS": {"certManager": "rc", "secretStore": "stable"},
+            "TRAINS": {"certManager": "stable", "secretStore": "stable"},
         },
         "resources": {
             "cluster": {
@@ -1526,7 +1527,7 @@ TEMPLATE_BLUEPRINT_INSTANCE = TemplateBlueprint(
 def get_insecure_listener(instance_name: str, broker_name: str) -> dict:
     return {
         "type": "Microsoft.IoTOperations/instances/brokers/listeners",
-        "apiVersion": "2025-07-01-preview",
+        "apiVersion": IoTOpsMgmtApiVersion.V20250701_preview.value,
         "name": f"{instance_name}/{broker_name}/{AIO_INSECURE_LISTENER_NAME}",
         "extendedLocation": {
             "name": "[resourceId('Microsoft.ExtendedLocation/customLocations', parameters('customLocationName'))]",
