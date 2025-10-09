@@ -10,6 +10,7 @@ from ._operations import Operations
 from ._operations import InstanceOperations
 from ._operations import AkriConnectorTemplateOperations
 from ._operations import AkriConnectorOperations
+from ._operations import AkriDiscoveryHandlerOperations
 from ._operations import BrokerOperations
 from ._operations import BrokerAuthenticationOperations
 from ._operations import BrokerAuthorizationOperations
@@ -18,6 +19,7 @@ from ._operations import DataflowEndpointOperations
 from ._operations import DataflowProfileOperations
 from ._operations import DataflowGraphOperations
 from ._operations import DataflowOperations
+from ._operations import DiagnosticOperations
 from ._operations import RegistryEndpointOperations
 
 from ._patch import __all__ as _patch_all
@@ -29,6 +31,7 @@ __all__ = [
     "InstanceOperations",
     "AkriConnectorTemplateOperations",
     "AkriConnectorOperations",
+    "AkriDiscoveryHandlerOperations",
     "BrokerOperations",
     "BrokerAuthenticationOperations",
     "BrokerAuthorizationOperations",
@@ -37,6 +40,7 @@ __all__ = [
     "DataflowProfileOperations",
     "DataflowGraphOperations",
     "DataflowOperations",
+    "DiagnosticOperations",
     "RegistryEndpointOperations",
 ]
 __all__.extend([p for p in _patch_all if p not in __all__])
