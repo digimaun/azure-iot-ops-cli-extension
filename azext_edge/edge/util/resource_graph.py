@@ -38,7 +38,9 @@ class ResourceGraph:
 
     def _process_resource_query(self, query: str, page_size: Optional[int] = None) -> List[dict]:
         result = {"data": []}
-        request_payload = {"subscriptions": self.subscriptions, "query": query, "options": {}}
+        request_payload = {"query": query, "options": {}}
+        if self.subscriptions:
+            request_payload["subscriptions"] = self.subscriptions
         if page_size:
             request_payload["options"]["$top"] = page_size
 

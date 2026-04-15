@@ -66,7 +66,7 @@ def test_query_resources(mocker, mocked_cmd, test_scenario: dict):
     from azext_edge.edge.util.resource_graph import GRAPH_RESOURCE_PATH, ResourceGraph
 
     resource_graph = ResourceGraph(cmd=mocked_cmd, subscriptions=test_scenario["subscriptions"])
-    assert resource_graph.subscriptions == test_scenario["subscriptions"]  # TODO when nothing passed in []
+    assert resource_graph.subscriptions == test_scenario["subscriptions"]
 
     expected_query = f"""
     Resources
@@ -85,11 +85,9 @@ def test_query_resources(mocker, mocked_cmd, test_scenario: dict):
     if isinstance(test_scenario["response"], list):
         assert result["data"] == list(itertools.chain.from_iterable([r["data"] for r in test_scenario["response"]]))
 
-    expected_request_body = {
-        "subscriptions": resource_graph.subscriptions,
-        "query": expected_query,
-        "options": {},
-    }
+    expected_request_body = {"query": expected_query, "options": {}}
+    if test_scenario["subscriptions"]:
+        expected_request_body["subscriptions"] = resource_graph.subscriptions
     if page_size:
         expected_request_body["options"]["$top"] = page_size
 
